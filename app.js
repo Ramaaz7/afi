@@ -9,9 +9,31 @@ const firebaseConfig = {
     appId: "YOUR_APP_ID"
 };
 
-// Initialize Firebase
-const app = firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
+// Initialize Firebase with safety check
+let db;
+try {
+    if (firebaseConfig.apiKey === "YOUR_API_KEY") {
+        console.warn("Firebase not configured! Using local-only mode. Please set your credentials in app.js.");
+        db = {
+            collection: () => ({
+                doc: () => ({
+                    get: () => Promise.resolve({ exists: false }),
+                    set: () => Promise.resolve(),
+                    update: () => Promise.resolve(),
+                    onSnapshot: () => (() => {})
+                }),
+                add: () => Promise.resolve(),
+                where: () => ({ where: () => ({ onSnapshot: () => (() => {}) }), onSnapshot: () => (() => {}) }),
+                orderBy: () => ({ onSnapshot: () => (() => {}), orderBy: () => ({ onSnapshot: () => (() => {}) }) })
+            })
+        };
+    } else {
+        const app = firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+    }
+} catch (err) {
+    console.error("Firebase init error:", err);
+}
 
 // State & State Management
 let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
@@ -73,24 +95,49 @@ function setupEventListeners() {
 
         const user = validUsers.find(u => u.username === usernameInput && u.password === passwordInput);
         if (user) {
-            // Fetch profile from Firestore
-            const userDoc = await db.collection('users').doc(user.username).get();
-            let profile = userDoc.exists ? userDoc.data() : { 
+            $('login-error').classList.add('hidden');
+            // Fetch profile from Firestore with error handling
+            let profile = { 
                 username: user.username, 
                 displayName: user.username.charAt(0).toUpperCase() + user.username.slice(1),
                 avatarUrl: `https://ui-avatars.com/api/?name=${user.username}&background=6366f1&color=fff`
             };
-            
-            if (!userDoc.exists) {
-                await db.collection('users').doc(user.username).set(profile);
+
+            try {
+                const userDoc = await db.collection('users').doc(user.username).get();
+                if (userDoc.exists) {
+                    profile = userDoc.data();
+                } else {
+                    await db.collection('users').doc(user.username).set(profile);
+                }
+            } catch (err) {
+                console.error("Firebase fetch error (Check your config!):", err);
+                // Continue with local profile if Firebase fails
             }
 
             currentUser = { ...user, ...profile };
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             showApp();
         } else {
-            alert('Invalid credentials! Use afra/afi123 or ramaaz/afi123');
+            $('login-error').classList.remove('hidden');
+            $('password').value = '';
+            $('password').focus();
         }
+    });
+
+    // Toggle Password Visibility
+    $('toggle-password').addEventListener('click', () => {
+        const passwordInput = $('password');
+        const icon = $('toggle-password').querySelector('i');
+        
+        if (passwordInput.type === 'password') {
+            passwordInput.type = 'text';
+            icon.setAttribute('data-lucide', 'eye-off');
+        } else {
+            passwordInput.type = 'password';
+            icon.setAttribute('data-lucide', 'eye');
+        }
+        lucide.createIcons();
     });
 
     // Logout
