@@ -35,9 +35,9 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
-    <!-- Leaflet.js (cdnjs for better reliability) -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+    <!-- Leaflet.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -278,6 +278,20 @@
                     <button type="submit" class="flex-1 py-2 bg-indigo-600 text-white font-medium rounded-xl hover:bg-indigo-700 transition-all">Save Task</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div id="profile-modal" class="fixed inset-0 z-[60] hidden flex flex-col items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 transition-all">
+        <div class="bg-white rounded-[2rem] p-8 w-full max-w-[320px] shadow-2xl relative text-center transform transition-transform scale-100">
+            <button id="close-profile-modal" class="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 transition-colors bg-slate-50 hover:bg-slate-100 rounded-full">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+            <div class="mt-2 mb-5">
+                <img id="modal-profile-img" src="" class="w-32 h-32 rounded-full shadow-lg object-cover mx-auto border-4 border-white ring-4 ring-indigo-50">
+            </div>
+            <h3 class="text-2xl font-bold text-slate-800" id="modal-profile-name">Name</h3>
+            <p class="text-sm font-medium text-slate-400" id="modal-profile-username">@username</p>
         </div>
     </div>
 

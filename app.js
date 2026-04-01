@@ -197,6 +197,16 @@ function setupEventListeners() {
     });
 
     $('close-modal').addEventListener('click', () => $('task-modal').classList.add('hidden'));
+    
+    // Profile Modal logic
+    $('close-profile-modal').addEventListener('click', () => {
+        $('profile-modal').classList.add('hidden');
+    });
+    
+    // Clicking outside modal to close
+    $('profile-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'profile-modal') $('profile-modal').classList.add('hidden');
+    });
 
     $('task-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -463,7 +473,7 @@ function renderChatMessages(msgs) {
             `;
         } else {
             div.innerHTML = `
-                <img src="${avatar}" class="w-7 h-7 rounded-full object-cover flex-shrink-0 self-end mb-1 border border-slate-200">
+                <img src="${avatar}" onclick="viewProfile('${msg.sender}')" class="w-7 h-7 rounded-full object-cover flex-shrink-0 self-end mb-1 border border-slate-200 cursor-pointer hover:opacity-80 transition-opacity">
                 <div class="flex flex-col items-start max-w-[75%]">
                     <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm">
                         ${msg.text}
@@ -474,28 +484,43 @@ function renderChatMessages(msgs) {
         container.appendChild(div);
     });
     container.scrollTop = container.scrollHeight;
+    lucide.createIcons();
 }
+
+window.viewProfile = (username) => {
+    const profile = chatUserDataCache[username] || { displayName: username, avatarUrl: `https://ui-avatars.com/api/?name=${username}&background=6366f1&color=fff` };
+    $('modal-profile-img').src = profile.avatarUrl;
+    $('modal-profile-name').textContent = profile.displayName || username;
+    $('modal-profile-username').textContent = '@' + username;
+    $('profile-modal').classList.remove('hidden');
+};
 
 function renderMap() {
     if (map) {
         setTimeout(() => map.invalidateSize(), 300);
         return;
     }
+    
+    if (typeof L === 'undefined') {
+        console.error("Leaflet library failed to load.");
+        return;
+    }
 
     setTimeout(() => {
         if (map) return;
         
-        // Final safety check to make sure the container exists AND has dimensions
         const mapContainer = $('map');
-        if (!mapContainer || mapContainer.offsetHeight === 0) return;
+        if (!mapContainer) return;
 
-        map = L.map('map', { zoomControl: false }).setView([12.9716, 77.5946], 3);
+        map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
         L.control.zoom({ position: 'bottomright' }).addTo(map);
-        map.invalidateSize(); // Force redraw immediately
+        
+        // Ensure tiles are drawn correctly after the element is visible
+        setTimeout(() => { map.invalidateSize(); }, 300);
         
         setupLocationListener();
-    }, 200); // Slight delay for the element transition to finish
+    }, 150);
 }
 
 function setupLocationListener() {
@@ -525,20 +550,21 @@ function setupLocationListener() {
             });
             
             const timestamp = (loc.lastUpdated && typeof loc.lastUpdated.toDate === 'function') ? new Date(loc.lastUpdated.toDate()).toLocaleTimeString() : '...';
-            const gMapsUrl = `https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`;
-            const appleMapsUrl = `http://maps.apple.com/?q=${loc.lat},${loc.lng}`;
             
-            const popupContent = `
-                <div class="p-1">
-                    <b class="text-slate-800">${isMe ? 'You' : loc.username}</b><br><span class="text-[10px] text-slate-400">Last updated: ${timestamp}</span>
-                    <div class="mt-2 flex flex-col gap-1.5">
-                        <a href="${gMapsUrl}" target="_blank" class="flex items-center gap-2 bg-slate-100 p-2 rounded-lg text-xs font-medium text-slate-700 transition-colors">Open in Google Maps</a>
-                        <a href="${appleMapsUrl}" target="_blank" class="flex items-center gap-2 bg-slate-100 p-2 rounded-lg text-xs font-medium text-slate-700 transition-colors">Open in Apple Maps</a>
-                    </div>
-                </div>
-            `;
+            const marker = L.marker([loc.lat, loc.lng], { icon: customIcon }).addTo(map);
             
-            markers[loc.username] = L.marker([loc.lat, loc.lng], { icon: customIcon }).addTo(map).bindPopup(popupContent);
+            if (isMe) {
+                // Just show a small popup for your own location
+                marker.bindPopup(`<div class="p-1"><b class="text-slate-800">You</b><br><span class="text-[10px] text-slate-400">Last updated: ${timestamp}</span></div>`);
+            } else {
+                // Instantly open Google Maps when clicking the partner's marker
+                marker.on('click', () => {
+                    const gMapsUrl = `https://www.google.com/maps/search/?api=1&query=${loc.lat},${loc.lng}`;
+                    window.open(gMapsUrl, '_blank');
+                });
+            }
+            
+            markers[loc.username] = marker;
             bounds.push([loc.lat, loc.lng]);
         });
         
