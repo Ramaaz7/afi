@@ -881,12 +881,47 @@ function escapeHtml(unsafe) {
     return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-window.viewProfile = (username) => {
-    const profile = chatUserDataCache[username] || { displayName: username, avatarUrl: `https://ui-avatars.com/api/?name=${username}&background=6366f1&color=fff` };
+window.viewProfile = async (username) => {
+    const profile = chatUserDataCache[username] || { displayName: username, avatarUrl: `https://ui-avatars.com/api/?name=${username}&background=6366f1&color=fff`, isOnline: false };
     $('modal-profile-img').src = profile.avatarUrl;
     $('modal-profile-name').textContent = profile.displayName || username;
     $('modal-profile-username').textContent = '@' + username;
+    
+    if ($('modal-profile-status')) {
+        $('modal-profile-status').innerHTML = `<span class="w-2 h-2 rounded-full ${profile.isOnline ? 'bg-green-500' : 'bg-slate-400'}"></span> ${profile.isOnline ? 'Online' : 'Offline'}`;
+        $('modal-profile-status').classList.remove('hidden');
+    }
+
+    if ($('modal-location-btn')) {
+        $('modal-location-btn').classList.add('hidden');
+        $('modal-location-btn').innerHTML = `<i data-lucide="map-pin" class="w-5 h-5 animate-pulse"></i> <span>Locating...</span>`;
+    }
+    
     $('profile-modal').classList.remove('hidden');
+    lucide.createIcons();
+    
+    try {
+        const locDoc = await db.collection('locations').doc(username).get();
+        if (locDoc.exists && $('modal-location-btn')) {
+            const data = locDoc.data();
+            if (data && data.lat && data.lng) {
+                $('modal-location-btn').href = `https://www.google.com/maps/search/?api=1&query=${data.lat},${data.lng}`;
+                $('modal-location-btn').classList.remove('hidden');
+                
+                if (data.lastUpdated) {
+                    const time = typeof data.lastUpdated.toDate === 'function' ? data.lastUpdated.toDate() : new Date();
+                    const diffMins = Math.floor((new Date() - time) / 60000);
+                    let timeText = diffMins < 1 ? 'Just now' : diffMins >= 60 ? Math.floor(diffMins/60) + 'h ago' : `${diffMins}m ago`;
+                    $('modal-location-btn').innerHTML = `<i data-lucide="map-pin" class="w-5 h-5"></i> <span class="tracking-tight">Target Location \xb7 ${timeText}</span>`;
+                } else {
+                    $('modal-location-btn').innerHTML = `<i data-lucide="map-pin" class="w-5 h-5"></i> <span>View Target Location</span>`;
+                }
+                lucide.createIcons();
+            }
+        }
+    } catch(e) {
+        console.error("Location lookup error: ", e);
+    }
 };
 
 let currentReactingMsgId = null;
@@ -980,40 +1015,47 @@ window.requestMapPermission = () => {
     
     if ("geolocation" in navigator) {
         if (!myLocationWatcher) {
-            myLocationWatcher = navigator.geolocation.watchPosition(
-                async position => {
-                    const { latitude, longitude } = position.coords;
-                    
-                    if ($('enable-location-btn')) {
-                        const btn = $('enable-location-btn');
-                        btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
-                        btn.classList.add('bg-green-500', 'hover:bg-green-600');
-                        btn.innerHTML = `<i data-lucide="check-circle-2" class="w-4 h-4"></i><span>Sharing</span>`;
-                        lucide.createIcons();
+            
+            if ('wakeLock' in navigator) {
+                navigator.wakeLock.request('screen').catch(()=>{});
+                document.addEventListener('visibilitychange', () => {
+                   if (document.visibilityState === 'visible') navigator.wakeLock.request('screen').catch(()=>{});
+                });
+            }
+
+            const updateLoc = async (position) => {
+                const { latitude, longitude } = position.coords;
+                if ($('enable-location-btn')) {
+                    const btn = $('enable-location-btn');
+                    btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                    btn.classList.add('bg-green-500', 'hover:bg-green-600');
+                    btn.innerHTML = `<i data-lucide="check-circle-2" class="w-4 h-4"></i><span>Sharing</span>`;
+                    lucide.createIcons();
+                }
+                try {
+                    await db.collection('locations').doc(currentUser.username).set({
+                        username: currentUser.username,
+                        lat: latitude,
+                        lng: longitude,
+                        lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                } catch(e) {}
+            };
+
+            const locError = (err) => {
+                console.error("Location error:", err);
+                if ($('map-permission-overlay')) {
+                    $('map-permission-overlay').classList.remove('hidden');
+                    if (err.code === 1) {
+                        $('map-permission-overlay').querySelector('p').innerHTML = "<b>Permission Blocked</b><br>App needs Map permission. Reset your browser settings (look for the lock icon) to allow tracking.";
+                    } else {
+                        $('map-permission-overlay').querySelector('p').innerHTML = "<b>GPS Error</b><br>Cannot find your coordinates. Ensure device location is on.";
                     }
-                    
-                    try {
-                        await db.collection('locations').doc(currentUser.username).set({
-                            username: currentUser.username,
-                            lat: latitude,
-                            lng: longitude,
-                            lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                    } catch(e) {}
-                },
-                err => {
-                    console.error("Location error:", err);
-                    if ($('map-permission-overlay')) {
-                        $('map-permission-overlay').classList.remove('hidden');
-                        if (err.code === 1) {
-                            $('map-permission-overlay').querySelector('p').innerHTML = "<b>Permission Blocked</b><br>App needs Map permission. Reset your browser settings (look for the lock icon) to allow tracking.";
-                        } else {
-                            $('map-permission-overlay').querySelector('p').innerHTML = "<b>GPS Error</b><br>Cannot find your coordinates. Ensure device location is on.";
-                        }
-                    }
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-            );
+                }
+            };
+
+            navigator.geolocation.getCurrentPosition(updateLoc, locError, { enableHighAccuracy: true, timeout: 10000 });
+            myLocationWatcher = navigator.geolocation.watchPosition(updateLoc, locError, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
         }
     } else {
         alert("Your browser does not support geolocation tracking.");
