@@ -97,12 +97,19 @@ function showApp() {
     $('nav-username').textContent = currentUser.displayName || currentUser.username;
     $('user-avatar-initial').textContent = (currentUser.displayName || currentUser.username)[0].toUpperCase();
     
-    // Set partner display name
     const partnerName = currentUser.username === 'afra' ? 'Ramaaz' : 'Afra';
     $('partner-name-display').textContent = partnerName;
     
+    if ($('display-name-input')) $('display-name-input').value = currentUser.displayName || currentUser.username;
+    if ($('username-id-input')) $('username-id-input').value = currentUser.username;
+    if ($('custom-avatar-url')) $('custom-avatar-url').value = currentUser.avatarUrl || '';
+    if ($('profile-preview')) $('profile-preview').src = currentUser.avatarUrl || `https://ui-avatars.com/api/?name=${currentUser.username}&background=6366f1&color=fff&size=128`;
+    
+    if(currentUser.wallpaperUrl) applyWallpaper(currentUser.wallpaperUrl);
+    
     switchTab(activeTab);
     updateScheduleHeader();
+    initPeerJS();
 }
 
 // 5. Event Listeners
@@ -210,6 +217,10 @@ function setupEventListeners() {
                         read: false,
                         timestamp: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
                     };
+                    if (window.replyingToMsg) {
+                        msg.replyTo = window.replyingToMsg;
+                        window.cancelReply();
+                    }
                     await db.collection('messages').add(msg);
                 }
                 updateMyStatus(false);
@@ -232,6 +243,137 @@ function setupEventListeners() {
         $('chat-input').value = '';
         $('cancel-edit-btn').classList.add('hidden');
     };
+
+    window.replyingToMsg = null;
+    window.startReply = (id, text, sender) => {
+        window.replyingToMsg = { id, text, sender };
+        $('reply-preview-name').textContent = sender === currentUser.username ? 'You' : sender;
+        $('reply-preview-text').textContent = text;
+        $('reply-preview').classList.remove('hidden');
+        $('chat-input').focus();
+    };
+
+    window.cancelReply = () => {
+        window.replyingToMsg = null;
+        $('reply-preview').classList.add('hidden');
+    };
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    $('chat-messages').addEventListener('touchstart', e => {
+        if(e.target.closest('.message-bubble')) {
+           touchStartX = e.changedTouches[0].clientX;
+           touchStartY = e.changedTouches[0].clientY;
+        }
+    }, {passive:true});
+
+    $('chat-messages').addEventListener('touchend', e => {
+        const bubble = e.target.closest('.message-bubble');
+        if(!bubble) return;
+        const endX = e.changedTouches[0].clientX;
+        const endY = e.changedTouches[0].clientY;
+        
+        const diffX = endX - touchStartX;
+        if (diffX > 60 && Math.abs(endY - touchStartY) < 40) { 
+            const id = bubble.getAttribute('data-id');
+            const text = bubble.getAttribute('data-text');
+            const sender = bubble.getAttribute('data-sender');
+            if(id && text && sender) window.startReply(id, decodeURIComponent(text), sender);
+        }
+    });
+
+    // Quick Emoji Picker
+    const quickEmojis = ['😂', '❤️', '😍', '🙏', '😭', '😊', '🥰', '👍', '🔥', '🤔', '👀', '🥺', '🎉', '✨', '💀', '💯', '😎', '😅'];
+    const emojiMenu = $('chat-emoji-menu');
+    
+    quickEmojis.forEach(emoji => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-lg text-lg transition-transform hover:scale-125';
+        btn.textContent = emoji;
+        btn.onclick = () => {
+            const input = $('chat-input');
+            const start = input.selectionStart || input.value.length;
+            const end = input.selectionEnd || input.value.length;
+            input.value = input.value.substring(0, start) + emoji + input.value.substring(end);
+            input.selectionStart = input.selectionEnd = start + emoji.length;
+            input.focus();
+        };
+        emojiMenu.appendChild(btn);
+    });
+
+    $('chat-emoji-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        emojiMenu.classList.toggle('hidden');
+        if (!emojiMenu.classList.contains('hidden')) {
+            emojiMenu.classList.add('grid');
+        } else {
+            emojiMenu.classList.remove('grid');
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#chat-emoji-menu') && !e.target.closest('#chat-emoji-btn')) {
+            emojiMenu.classList.add('hidden');
+            emojiMenu.classList.remove('grid');
+        }
+    });
+
+    // Voice Record Listening
+    let mediaRecorder;
+    let audioChunks = [];
+
+    $('voice-record-btn').addEventListener('click', async () => {
+        if (!storage) return alert("Storage not configured.");
+        
+        if (mediaRecorder && mediaRecorder.state === 'recording') {
+            mediaRecorder.stop();
+            $('voice-record-btn').classList.remove('bg-red-500', 'text-white', 'animate-pulse');
+            $('voice-record-btn').classList.add('bg-slate-50', 'text-slate-400');
+        } else {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.start();
+                audioChunks = [];
+                
+                $('voice-record-btn').classList.remove('bg-slate-50', 'text-slate-400');
+                $('voice-record-btn').classList.add('bg-red-500', 'text-white', 'animate-pulse');
+                
+                mediaRecorder.addEventListener("dataavailable", event => {
+                    audioChunks.push(event.data);
+                });
+                mediaRecorder.addEventListener("stop", async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    stream.getTracks().forEach(t => t.stop());
+                    
+                    try {
+                        const url = await new Promise((resolve, reject) => {
+                            const ref = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.webm`);
+                            ref.put(audioBlob).then(() => {
+                                ref.getDownloadURL().then(resolve).catch(reject);
+                            }).catch(reject);
+                        });
+                        
+                        await db.collection('messages').add({
+                            sender: currentUser.username,
+                            mediaUrl: url,
+                            mediaType: 'audio',
+                            read: false,
+                            timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                        updateMyStatus(false);
+                    } catch(err) {
+                        console.error("Audio upload error:", err);
+                        alert("Audio upload failed.");
+                    }
+                });
+            } catch(e) { 
+                console.error(e);
+                alert("Microphone access denied or unavailable."); 
+            }
+        }
+    });
 
     // Media Upload Listeners
     $('attach-media-btn').addEventListener('click', () => $('chat-media-input').click());
@@ -353,16 +495,25 @@ function setupEventListeners() {
         showApp();
     });
 
-    $('avatar-file-input').addEventListener('change', (e) => {
+    $('avatar-file-input').addEventListener('change', async (e) => {
         const file = e.target.files[0];
-        if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                const base64 = event.target.result;
-                $('profile-preview').src = base64;
-                $('custom-avatar-url').value = base64;
-            };
-            reader.readAsDataURL(file);
+        if (!file || !storage) return;
+        
+        $('profile-preview').style.opacity = '0.4';
+        
+        try {
+            const ext = file.name.split('.').pop() || 'tmp';
+            const storageRef = storage.ref(`avatars/${currentUser.username}_${Date.now()}.${ext}`);
+            await storageRef.put(file);
+            const url = await storageRef.getDownloadURL();
+            
+            $('profile-preview').src = url;
+            $('custom-avatar-url').value = url;
+            $('profile-preview').style.opacity = '1';
+        } catch(err) {
+            console.error("Avatar Upload Error: ", err);
+            alert("Failed to upload profile picture. Ensure the image is valid.");
+            $('profile-preview').style.opacity = '1';
         }
     });
 }
@@ -632,6 +783,8 @@ function renderChatMessages(msgs) {
         if (msg.mediaUrl) {
             if (msg.mediaType === 'video') {
                 contentHtml += `<video src="${msg.mediaUrl}" controls class="max-w-[180px] md:max-w-[220px] rounded-lg mt-1 mb-1 object-cover bg-black/10"></video>`;
+            } else if (msg.mediaType === 'audio') {
+                contentHtml += `<audio src="${msg.mediaUrl}" controls class="h-10 mt-1 mb-1 max-w-[200px]" controlsList="nodownload"></audio>`;
             } else {
                 contentHtml += `<a href="${msg.mediaUrl}" target="_blank"><img src="${msg.mediaUrl}" class="max-w-[180px] md:max-w-[220px] rounded-lg mt-1 mb-1 object-cover border border-black/5"></a>`;
             }
@@ -639,6 +792,16 @@ function renderChatMessages(msgs) {
         
         if (msg.text && msg.text !== '[Image]' && msg.text !== '[Video]') {
             contentHtml += `<div class="${msg.mediaUrl ? 'mt-2' : ''} break-words whitespace-pre-wrap">${escapeHtml(msg.text)}</div>`;
+        }
+        
+        if (msg.replyTo) {
+            const replySender = msg.replyTo.sender === currentUser.username ? 'You' : msg.replyTo.sender;
+            contentHtml = `
+                <div class="mb-1.5 px-3 py-1.5 bg-black/10 rounded-lg border-l-[3px] ${isMine ? 'border-indigo-300' : 'border-slate-400'} text-[11px] opacity-90 cursor-pointer overflow-hidden">
+                    <strong class="${isMine ? 'text-indigo-100' : 'text-slate-600'} block mb-0.5 leading-none">${replySender}</strong>
+                    <div class="truncate max-w-[150px] md:max-w-[200px] text-ellipsis whitespace-nowrap overflow-hidden">${escapeHtml(msg.replyTo.text)}</div>
+                </div>
+            ` + contentHtml;
         }
 
         // Reactions logic
@@ -664,6 +827,9 @@ function renderChatMessages(msgs) {
             
             div.innerHTML = `
                 <div class="flex items-center gap-1.5 opacity-0 md:opacity-0 self-center transition-all group-hover:opacity-100 hidden md:flex">
+                    <button type="button" onclick="startReply('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '[Media]')}'), '${msg.sender}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Reply">
+                        <i data-lucide="reply" class="w-4 h-4"></i>
+                    </button>
                     <button type="button" onclick="startEdit('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '')}'))" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Edit message">
                         <i data-lucide="pencil" class="w-4 h-4"></i>
                     </button>
@@ -672,7 +838,7 @@ function renderChatMessages(msgs) {
                     </button>
                 </div>
                 <div class="flex flex-col items-end w-full relative">
-                    <div class="message-bubble mine px-4 py-2 pt-2.5 shadow-sm text-sm relative" style="min-width: 65px;" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
+                    <div class="message-bubble mine px-4 py-2 pt-2.5 shadow-sm text-sm relative" style="min-width: 65px;" data-id="${msg.id}" data-text="${encodeURIComponent(msg.text || '[Media]')}" data-sender="${msg.sender}" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
                         ${contentHtml}
                         <div class="flex items-center justify-end mt-1.5 leading-none tracking-tighter" title="${msg.read ? 'Seen' : 'Delivered'}">
                             ${editedTag}
@@ -687,15 +853,18 @@ function renderChatMessages(msgs) {
             div.innerHTML = `
                 <img src="${avatar}" onclick="viewProfile('${msg.sender}')" class="w-7 h-7 rounded-full object-cover flex-shrink-0 self-end mb-1 border border-slate-200 cursor-pointer hover:opacity-80 transition-opacity">
                 <div class="flex flex-col items-start max-w-[75%] relative">
-                    <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm relative" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
+                    <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm relative" data-id="${msg.id}" data-text="${encodeURIComponent(msg.text || '[Media]')}" data-sender="${msg.sender}" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
                         ${contentHtml}
                         ${msg.edited ? `<div class="flex items-center justify-start mt-1.5">${editedTag}</div>` : ''}
                         ${reactionsHtml}
                     </div>
                 </div>
-                <div class="opacity-0 md:opacity-0 self-center transition-all group-hover:opacity-100 hidden md:flex">
+                <div class="opacity-0 md:opacity-0 self-center transition-all group-hover:opacity-100 hidden md:flex items-center gap-1.5">
                     <button type="button" onclick="openReactionPicker(event, '${msg.id}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="React">
                         <i data-lucide="smile-plus" class="w-4 h-4"></i>
+                    </button>
+                    <button type="button" onclick="startReply('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '[Media]')}'), '${msg.sender}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Reply">
+                        <i data-lucide="reply" class="w-4 h-4"></i>
                     </button>
                 </div>
             `;
@@ -705,11 +874,6 @@ function renderChatMessages(msgs) {
     
     container.scrollTop = container.scrollHeight;
     lucide.createIcons();
-    
-    // Parse iOS theme Twemojis
-    if (window.twemoji) {
-        twemoji.parse(container, { folder: 'svg', ext: '.svg' });
-    }
 }
 
 // Helper to escape basic HTML symbols to prevent XSS
@@ -763,6 +927,22 @@ window.reactToMessage = async (emoji) => {
     currentReactingMsgId = null;
 };
 
+window.promptMoreEmoji = async () => {
+    $('reaction-picker').classList.add('hidden');
+    setTimeout(async () => {
+        const custom = prompt("Send an emoji from your keyboard:");
+        if (custom && custom.trim().length > 0) {
+            const emojiStr = custom.trim().substring(0, 5); 
+            if (currentReactingMsgId) {
+                try {
+                    await db.collection('messages').doc(currentReactingMsgId).set({ reactions: { [currentUser.username]: emojiStr } }, { merge: true });
+                } catch(e) {}
+            }
+        }
+        currentReactingMsgId = null;
+    }, 50);
+};
+
 function renderMap() {
     if (map) {
         setTimeout(() => map.invalidateSize(), 300);
@@ -791,7 +971,58 @@ function renderMap() {
     }, 150);
 }
 
+let myLocationWatcher = null;
+
+window.requestMapPermission = () => {
+    if ($('map-permission-overlay')) $('map-permission-overlay').classList.add('hidden');
+    
+    if (firebaseConfig.apiKey === "YOUR_API_KEY") return;
+    
+    if ("geolocation" in navigator) {
+        if (!myLocationWatcher) {
+            myLocationWatcher = navigator.geolocation.watchPosition(
+                async position => {
+                    const { latitude, longitude } = position.coords;
+                    
+                    if ($('enable-location-btn')) {
+                        const btn = $('enable-location-btn');
+                        btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                        btn.classList.add('bg-green-500', 'hover:bg-green-600');
+                        btn.innerHTML = `<i data-lucide="check-circle-2" class="w-4 h-4"></i><span>Sharing</span>`;
+                        lucide.createIcons();
+                    }
+                    
+                    try {
+                        await db.collection('locations').doc(currentUser.username).set({
+                            username: currentUser.username,
+                            lat: latitude,
+                            lng: longitude,
+                            lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    } catch(e) {}
+                },
+                err => {
+                    console.error("Location error:", err);
+                    if ($('map-permission-overlay')) {
+                        $('map-permission-overlay').classList.remove('hidden');
+                        if (err.code === 1) {
+                            $('map-permission-overlay').querySelector('p').innerHTML = "<b>Permission Blocked</b><br>App needs Map permission. Reset your browser settings (look for the lock icon) to allow tracking.";
+                        } else {
+                            $('map-permission-overlay').querySelector('p').innerHTML = "<b>GPS Error</b><br>Cannot find your coordinates. Ensure device location is on.";
+                        }
+                    }
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        }
+    } else {
+        alert("Your browser does not support geolocation tracking.");
+    }
+};
+
 function setupLocationListener() {
+    // Attempt tracking
+    requestMapPermission();
     if (listeners.locations) listeners.locations();
     
     listeners.locations = db.collection('locations').onSnapshot(snapshot => {
@@ -848,5 +1079,180 @@ function setupLocationListener() {
 function updateScheduleHeader() {
     $('schedule-date').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 }
+
+// --- Calls System (PeerJS) ---
+let peer;
+let currentCall;
+let localMediaStream;
+
+function initPeerJS() {
+    if (peer || !currentUser || typeof Peer === 'undefined') return;
+    
+    const myId = 'afi_routine_' + currentUser.username.replace(/[^a-zA-Z0-9]/g, '');
+    peer = new Peer(myId, { debug: 1 });
+    
+    peer.on('call', call => {
+        const callerName = call.peer.replace('afi_routine_', '');
+        const isVideo = call.metadata && call.metadata.isVideo;
+        const confirmMsg = `${callerName} is giving you a ${isVideo ? 'Video' : 'Voice'} Call! Accept?`;
+        
+        if (confirm(confirmMsg)) {
+            navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo }).then(stream => {
+                localMediaStream = stream;
+                call.answer(stream);
+                handleCallStream(call, isVideo);
+            }).catch(e => {
+                alert("Permission required for calls.");
+                call.close();
+            });
+        } else {
+            call.close();
+        }
+    });
+}
+
+const startCall = (isVideo) => {
+    const partner = Object.keys(chatUserDataCache).find(u => u !== currentUser.username);
+    if (!partner) return alert("We haven't detected your partner yet. Try again when they are online.");
+    
+    $('call-title').textContent = isVideo ? 'Video Call' : 'Voice Call';
+    $('call-status-text').textContent = 'Calling...';
+    $('call-icon').classList.toggle('hidden', isVideo);
+    $('call-overlay').classList.remove('hidden');
+    $('remote-video').classList.toggle('hidden', !isVideo);
+    $('local-video').classList.toggle('hidden', !isVideo);
+    
+    navigator.mediaDevices.getUserMedia({ audio: true, video: isVideo }).then(stream => {
+        localMediaStream = stream;
+        
+        if (isVideo) {
+            $('local-video').srcObject = stream;
+        }
+        
+        const partnerId = 'afi_routine_' + partner.replace(/[^a-zA-Z0-9]/g, '');
+        const call = peer.call(partnerId, stream, { metadata: { isVideo } });
+        handleCallStream(call, isVideo);
+    }).catch(err => {
+        console.error(err);
+        alert("Camera/Microphone required to make calls.");
+        $('call-overlay').classList.add('hidden');
+    });
+};
+
+if ($('start-call-btn')) $('start-call-btn').addEventListener('click', () => startCall(false));
+if ($('start-video-btn')) $('start-video-btn').addEventListener('click', () => startCall(true));
+
+$('end-call-btn').addEventListener('click', endCall);
+
+function handleCallStream(call, isVideo) {
+    currentCall = call;
+    $('call-title').textContent = isVideo ? 'Video Call' : 'Voice Call';
+    $('call-status-text').textContent = 'Call Connected';
+    $('call-overlay').classList.remove('hidden');
+    $('call-icon').classList.toggle('hidden', isVideo);
+    
+    if (isVideo && localMediaStream) {
+        $('local-video').srcObject = localMediaStream;
+        $('local-video').classList.remove('hidden');
+    }
+    
+    call.on('stream', remoteStream => {
+        if (isVideo) {
+            $('remote-video').srcObject = remoteStream;
+            $('remote-video').classList.remove('hidden');
+        } else {
+            let audioEl = document.getElementById('remote-audio-player');
+            if (!audioEl) {
+                audioEl = document.createElement('audio');
+                audioEl.id = 'remote-audio-player';
+                audioEl.autoplay = true;
+                document.body.appendChild(audioEl);
+            }
+            audioEl.srcObject = remoteStream;
+        }
+    });
+    
+    call.on('close', endCall);
+    call.on('error', endCall);
+}
+
+function endCall() {
+    if (currentCall) currentCall.close();
+    currentCall = null;
+    
+    if (localMediaStream) {
+        localMediaStream.getTracks().forEach(t => t.stop());
+        localMediaStream = null;
+    }
+    
+    if ($('remote-video')) $('remote-video').srcObject = null;
+    if ($('local-video')) $('local-video').srcObject = null;
+    if ($('call-overlay')) $('call-overlay').classList.add('hidden');
+}
+
+// --- Wallpaper Settings ---
+function applyWallpaper(url) {
+    if (!$('chat-messages')) return;
+    if (url) {
+        $('chat-messages').style.backgroundImage = `url(${url})`;
+        $('chat-messages').style.backgroundSize = 'cover';
+        $('chat-messages').style.backgroundPosition = 'center';
+        $('chat-messages').style.backgroundAttachment = 'fixed';
+        $('chat-messages').classList.remove('bg-slate-50/50');
+        if ($('remove-wallpaper-btn')) $('remove-wallpaper-btn').classList.remove('hidden');
+    } else {
+        $('chat-messages').style.backgroundImage = '';
+        $('chat-messages').classList.add('bg-slate-50/50');
+        if ($('remove-wallpaper-btn')) $('remove-wallpaper-btn').classList.add('hidden');
+    }
+}
+
+if ($('wallpaper-upload')) {
+    $('wallpaper-upload').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file || !storage) return;
+        
+        try {
+            const btn = e.target.previousElementSibling.previousElementSibling; 
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>`;
+            lucide.createIcons();
+            
+            const ref = storage.ref(`wallpapers/${currentUser.username}_${Date.now()}`);
+            await ref.put(file);
+            const url = await ref.getDownloadURL();
+            
+            await db.collection('users').doc(currentUser.username).update({
+                wallpaperUrl: url
+            });
+            
+            currentUser.wallpaperUrl = url;
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            applyWallpaper(url);
+            
+            btn.innerHTML = originalHtml;
+            lucide.createIcons();
+        } catch(err) {
+            console.error(err);
+            alert("Failed to upload wallpaper.");
+            const btn = e.target.previousElementSibling.previousElementSibling;
+            btn.innerHTML = `<i data-lucide="image" class="w-4 h-4"></i> Upload Wallpaper`;
+            lucide.createIcons();
+        }
+    });
+}
+
+window.removeWallpaper = async () => {
+    try {
+        await db.collection('users').doc(currentUser.username).update({
+            wallpaperUrl: firebase.firestore.FieldValue.delete()
+        });
+        delete currentUser.wallpaperUrl;
+        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        applyWallpaper(null);
+    } catch(err) {
+        console.error(err);
+    }
+};
 
 initApp();
