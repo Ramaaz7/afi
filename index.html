@@ -31,6 +31,10 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
+    
+    <!-- Twemoji for iOS-like uniform emojis -->
+    <script src="https://cdn.jsdelivr.net/npm/@twemoji/api@14.1.0/dist/twemoji.min.js"></script>
     
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
@@ -114,9 +118,11 @@
                     <span class="text-xs md:text-sm font-medium">Checklist</span>
                 </button>
                 <button data-tab="tab-chat" class="nav-item flex flex-col md:flex-row items-center gap-3 px-4 py-3 rounded-xl transition-all w-full md:mb-1 relative">
-                    <i data-lucide="message-circle" class="w-5 h-5"></i>
+                    <div class="relative">
+                        <i data-lucide="message-circle" class="w-5 h-5"></i>
+                        <span id="chat-badge" class="hidden absolute -top-1.5 -right-2 bg-red-500 text-white text-[9px] font-bold px-1.5 py-px rounded-full border border-white min-w-[16px] text-center"></span>
+                    </div>
                     <span class="text-xs md:text-sm font-medium">Shared Chat</span>
-                    <span id="chat-badge" class="hidden absolute top-2 right-4 w-2 h-2 bg-red-500 rounded-full"></span>
                 </button>
                 <button data-tab="tab-map" class="nav-item flex flex-col md:flex-row items-center gap-3 px-4 py-3 rounded-xl transition-all w-full md:mb-1">
                     <i data-lucide="map" class="w-5 h-5"></i>
@@ -188,23 +194,46 @@
                                     <i data-lucide="users" class="w-5 h-5"></i>
                                 </div>
                                 <div>
-                                    <h4 class="font-bold text-slate-800">Our Space</h4>
+                                    <h4 class="font-bold text-slate-800" id="chat-partner-name">Our Space</h4>
                                     <div class="flex items-center gap-1.5">
-                                        <span class="w-2 h-2 bg-green-500 rounded-full"></span>
-                                        <span class="text-xs text-slate-500">Always Connected</span>
+                                        <span class="w-2 h-2 bg-slate-300 rounded-full transition-colors" id="online-status-dot"></span>
+                                        <span class="text-xs text-slate-500" id="online-status-text">connecting...</span>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
+                        <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50 pb-2">
                             <!-- Messages injected here -->
                         </div>
+                        
+                        <!-- Typing Indicator -->
+                        <div id="typing-indicator" class="px-6 py-2 bg-slate-50/50 flex items-center gap-2 hidden h-[30px] transition-opacity">
+                            <span class="text-xs font-medium text-slate-400 italic" id="typing-text">typing</span>
+                            <div class="flex gap-1 items-center pt-1">
+                                <div class="w-1 h-1 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 0s;"></div>
+                                <div class="w-1 h-1 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 0.1s;"></div>
+                                <div class="w-1 h-1 bg-slate-400 rounded-full animate-bounce" style="animation-delay: 0.2s;"></div>
+                            </div>
+                        </div>
 
-                        <form id="chat-form" class="p-4 border-t border-slate-100 bg-white flex gap-2">
-                            <input type="text" id="chat-input" placeholder="Type a message..." class="flex-1 px-4 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500">
-                            <button type="submit" class="bg-indigo-600 text-white px-5 rounded-xl hover:bg-indigo-700 transition-colors">
-                                <i data-lucide="send" class="w-5 h-5"></i>
+                        <form id="chat-form" class="p-3 border-t border-slate-100 bg-white flex gap-2 items-center">
+                            <input type="hidden" id="edit-message-id" value="">
+                            <button type="button" id="attach-media-btn" class="p-2 text-slate-400 hover:text-indigo-600 transition-colors bg-slate-50 hover:bg-slate-100 rounded-xl flex-shrink-0" title="Attach Image or Video">
+                                <i data-lucide="paperclip" class="w-5 h-5"></i>
+                            </button>
+                            <input type="file" id="chat-media-input" accept="image/*,video/*" class="hidden">
+                            
+                            <div class="flex-1 relative flex items-center">
+                                <input type="text" id="chat-input" placeholder="Type a message..." class="w-full px-4 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                                <button type="button" id="cancel-edit-btn" onclick="cancelEdit()" class="absolute right-2 p-1 text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-full hidden transition-all" title="Cancel Edit">
+                                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                                </button>
+                            </div>
+                            
+                            <button type="submit" id="send-btn" class="bg-indigo-600 text-white p-2.5 rounded-xl hover:bg-indigo-700 transition-colors flex items-center justify-center flex-shrink-0">
+                                <i data-lucide="send" class="w-5 h-5" id="send-icon"></i>
+                                <i data-lucide="loader-2" class="w-5 h-5 animate-spin hidden" id="upload-spinner"></i>
                             </button>
                         </form>
                     </div>
@@ -260,6 +289,15 @@
 
             </section>
         </main>
+    </div>
+
+    <!-- Reaction Picker Modal/Tooltip -->
+    <div id="reaction-picker" class="fixed z-[70] hidden bg-white rounded-[2rem] shadow-[0_10px_40px_-10px_rgba(0,0,0,0.2)] border border-slate-100 flex items-center gap-1.5 p-2 transition-all transform scale-100">
+        <button onclick="reactToMessage('❤️')" class="w-10 h-10 hover:bg-slate-100 rounded-full flex items-center justify-center text-2xl transition-transform hover:scale-125 hover:-translate-y-1">❤️</button>
+        <button onclick="reactToMessage('😂')" class="w-10 h-10 hover:bg-slate-100 rounded-full flex items-center justify-center text-2xl transition-transform hover:scale-125 hover:-translate-y-1">😂</button>
+        <button onclick="reactToMessage('😮')" class="w-10 h-10 hover:bg-slate-100 rounded-full flex items-center justify-center text-2xl transition-transform hover:scale-125 hover:-translate-y-1">😮</button>
+        <button onclick="reactToMessage('😢')" class="w-10 h-10 hover:bg-slate-100 rounded-full flex items-center justify-center text-2xl transition-transform hover:scale-125 hover:-translate-y-1">😢</button>
+        <button onclick="reactToMessage('👍')" class="w-10 h-10 hover:bg-slate-100 rounded-full flex items-center justify-center text-2xl transition-transform hover:scale-125 hover:-translate-y-1">👍</button>
     </div>
 
     <!-- Modals -->

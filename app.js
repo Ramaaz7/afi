@@ -11,6 +11,7 @@ const firebaseConfig = {
 
 // Initialize Firebase with safety check
 let db;
+let storage;
 try {
     if (firebaseConfig.apiKey === "YOUR_API_KEY") {
         console.warn("Firebase not configured! Using local-only mode. Please set your credentials in app.js.");
@@ -27,9 +28,11 @@ try {
                 orderBy: () => ({ onSnapshot: () => (() => {}), orderBy: () => ({ onSnapshot: () => (() => {}) }) })
             })
         };
+        storage = null;
     } else {
         const app = firebase.initializeApp(firebaseConfig);
         db = firebase.firestore();
+        storage = firebase.storage();
     }
 } catch (err) {
     console.error("Firebase init error:", err);
@@ -55,8 +58,28 @@ async function initApp() {
         showLogin();
     }
     
+    if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+        Notification.requestPermission();
+    }
+    
     lucide.createIcons();
     setupEventListeners();
+    
+    // Ongoing status ping
+    if (currentUser && !listeners.statusPing) {
+        updateMyStatus();
+        listeners.statusPing = setInterval(updateMyStatus, 30000); // 30s ping
+    }
+}
+
+async function updateMyStatus(isTyping = false) {
+    if (!currentUser || firebaseConfig.apiKey === "YOUR_API_KEY") return;
+    try {
+        await db.collection('users').doc(currentUser.username).update({
+            lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+            isTyping: isTyping
+        });
+    } catch(e) {}
 }
 
 function showLogin() {
@@ -173,27 +196,91 @@ function setupEventListeners() {
     $('chat-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const text = $('chat-input').value.trim();
+        const editId = $('edit-message-id').value;
+        
         if (text) {
-            const msg = {
-                sender: currentUser.username,
-                text,
-                timestamp: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
-            };
-            
             try {
-                await db.collection('messages').add(msg);
-                // Trigger local update for mock mode
-                if (firebaseConfig.apiKey === "YOUR_API_KEY") {
-                    const localMsgs = JSON.parse(localStorage.getItem('mock_messages') || '[]');
-                    localMsgs.push({ ...msg, timestamp: new Date().toISOString(), id: Date.now() });
-                    localStorage.setItem('mock_messages', JSON.stringify(localMsgs));
-                    window.dispatchEvent(new Event('mock_chat_update'));
+                if (editId) {
+                    await db.collection('messages').doc(editId).update({ text, edited: true });
+                    window.cancelEdit();
+                } else {
+                    const msg = {
+                        sender: currentUser.username,
+                        text,
+                        read: false,
+                        timestamp: firebase.firestore ? firebase.firestore.FieldValue.serverTimestamp() : new Date()
+                    };
+                    await db.collection('messages').add(msg);
                 }
+                updateMyStatus(false);
             } catch (err) {
                 console.error("Chat send error:", err);
             }
-            $('chat-input').value = '';
+            if(!editId) $('chat-input').value = '';
         }
+    });
+
+    window.startEdit = (id, text) => {
+        $('edit-message-id').value = id;
+        $('chat-input').value = text;
+        $('chat-input').focus();
+        $('cancel-edit-btn').classList.remove('hidden');
+    };
+
+    window.cancelEdit = () => {
+        $('edit-message-id').value = '';
+        $('chat-input').value = '';
+        $('cancel-edit-btn').classList.add('hidden');
+    };
+
+    // Media Upload Listeners
+    $('attach-media-btn').addEventListener('click', () => $('chat-media-input').click());
+    
+    $('chat-media-input').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (!storage) { alert("Firebase Storage not configured."); return; }
+        if (file.size > 20 * 1024 * 1024) { alert("File is too large! Maximum limit is 20MB."); return; }
+        
+        $('send-icon').classList.add('hidden');
+        $('upload-spinner').classList.remove('hidden');
+        $('attach-media-btn').disabled = true;
+        
+        try {
+            const ext = file.name.split('.').pop() || 'tmp';
+            const storageRef = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.${ext}`);
+            await storageRef.put(file);
+            const url = await storageRef.getDownloadURL();
+            
+            const isVideo = file.type.startsWith('video/');
+            const msg = {
+                sender: currentUser.username,
+                text: isVideo ? '[Video]' : '[Image]',
+                mediaUrl: url,
+                mediaType: isVideo ? 'video' : 'image',
+                read: false,
+                timestamp: firebase.firestore.FieldValue.serverTimestamp()
+            };
+            
+            await db.collection('messages').add(msg);
+            updateMyStatus(false);
+        } catch (err) {
+            console.error("Upload Error:", err);
+            alert("Upload failed. Make sure your Firebase Storage rules allow test-mode uploads.");
+        }
+        
+        $('send-icon').classList.remove('hidden');
+        $('upload-spinner').classList.add('hidden');
+        $('attach-media-btn').disabled = false;
+        $('chat-media-input').value = '';
+        lucide.createIcons();
+    });
+
+    let typingTimeout = null;
+    $('chat-input').addEventListener('input', () => {
+        updateMyStatus(true);
+        if (typingTimeout) clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => { updateMyStatus(false); }, 3000);
     });
 
     $('close-modal').addEventListener('click', () => $('task-modal').classList.add('hidden'));
@@ -206,6 +293,15 @@ function setupEventListeners() {
     // Clicking outside modal to close
     $('profile-modal').addEventListener('click', (e) => {
         if (e.target.id === 'profile-modal') $('profile-modal').classList.add('hidden');
+    });
+
+    // Close reaction picker when clicking outside
+    document.addEventListener('click', (e) => {
+        const picker = $('reaction-picker');
+        if (picker && !picker.classList.contains('hidden') && !picker.contains(e.target)) {
+            picker.classList.add('hidden');
+            currentReactingMsgId = null;
+        }
     });
 
     $('task-form').addEventListener('submit', async (e) => {
@@ -316,7 +412,11 @@ function renderTab(tabId) {
     switch (tabId) {
         case 'tab-schedule': setupScheduleListener(); break;
         case 'tab-checklist': setupChecklistListener(); break;
-        case 'tab-chat': setupChatListener(); break;
+        case 'tab-chat': 
+            setupChatListener(); 
+            unreadChatCount = 0;
+            if ($('chat-badge')) $('chat-badge').classList.add('hidden');
+            break;
         case 'tab-map': renderMap(); break;
         case 'tab-settings': loadSettings(); break;
     }
@@ -417,12 +517,14 @@ window.toggleChecklistItem = (id, checked) => db.collection('checklist').doc(id)
 window.deleteChecklistItem = id => db.collection('checklist').doc(id).delete();
 
 let chatUserDataCache = {};
+let unreadChatCount = 0;
+let initialChatLoad = true;
 
 function setupChatListener() {
     if (listeners.chat) listeners.chat();
+    initialChatLoad = true;
 
     if (firebaseConfig.apiKey === "YOUR_API_KEY") {
-        // Mock mode: listen to local storage events
         const updateMockChat = () => {
              const msgs = JSON.parse(localStorage.getItem('mock_messages') || '[]');
              renderChatMessages(msgs.map(m => ({...m, timestamp: { toDate: () => new Date(m.timestamp) } })));
@@ -434,19 +536,82 @@ function setupChatListener() {
     }
 
     listeners.chat = db.collection('messages').orderBy('timestamp', 'asc').onSnapshot(async snapshot => {
-        // Build user cache once to prevent lagging on every message
         if (Object.keys(chatUserDataCache).length === 0) {
             try {
                 const userDocs = await db.collection('users').get();
                 userDocs.forEach(doc => { chatUserDataCache[doc.id] = doc.data(); });
-            } catch (e) {
-                console.warn("Could not fetch user cache for chat");
-            }
+            } catch (e) {}
         }
         
-        const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        // Handle new message notifications
+        snapshot.docChanges().forEach(change => {
+            if (change.type === 'added') {
+                const msg = change.doc.data();
+                if (!initialChatLoad && msg.sender !== currentUser.username) {
+                    if (Notification.permission === 'granted' && (document.hidden || activeTab !== 'tab-chat')) {
+                        const senderName = chatUserDataCache[msg.sender]?.displayName || msg.sender;
+                        new Notification(`New message from ${senderName}`, { body: msg.text, icon: chatUserDataCache[msg.sender]?.avatarUrl });
+                    }
+                    if (activeTab !== 'tab-chat') {
+                        unreadChatCount++;
+                        const badge = $('chat-badge');
+                        if (badge) {
+                            badge.textContent = unreadChatCount > 9 ? '9+' : unreadChatCount;
+                            badge.classList.remove('hidden');
+                        }
+                    }
+                }
+            }
+        });
+        
+        initialChatLoad = false;
+        
+        const msgs = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            // WhatsApp-style: Mark read immediately if chat is open!
+            if (data.sender !== currentUser.username && !data.read && activeTab === 'tab-chat' && !document.hidden) {
+                doc.ref.update({ read: true }).catch(()=>{});
+            }
+            msgs.push({ id: doc.id, ...data });
+        });
+        
         renderChatMessages(msgs);
     });
+    
+    // Partner's Status listener (Last seen / Typing)
+    if (!listeners.partnerStatus) {
+        const partnerId = currentUser.username === 'afra' ? 'ramaaz' : 'afra';
+        listeners.partnerStatus = db.collection('users').doc(partnerId).onSnapshot(doc => {
+            if (doc.exists) {
+                const d = doc.data();
+                $('chat-partner-name').textContent = d.displayName || partnerId;
+                
+                // Typing detection
+                if (d.isTyping) {
+                    $('typing-indicator').classList.remove('hidden');
+                    $('typing-text').textContent = (d.displayName || partnerId) + " is typing";
+                } else {
+                    $('typing-indicator').classList.add('hidden');
+                }
+                
+                // Online/Last Seen computation
+                const now = new Date();
+                let isOnline = false;
+                
+                if (d.lastSeen && typeof d.lastSeen.toDate === 'function') {
+                    const lastSeenTime = d.lastSeen.toDate();
+                    const secondsAgo = Math.floor((now - lastSeenTime) / 1000);
+                    if (secondsAgo < 60) {
+                        isOnline = true;
+                    }
+                }
+                
+                $('online-status-text').textContent = isOnline ? "Online" : "Offline";
+                $('online-status-dot').className = `w-2 h-2 rounded-full transition-colors ${isOnline ? 'bg-green-500' : 'bg-red-500'}`;
+            }
+        });
+    }
 }
 
 function renderChatMessages(msgs) {
@@ -461,30 +626,95 @@ function renderChatMessages(msgs) {
         const avatar = senderProfile.avatarUrl || `https://ui-avatars.com/api/?name=${msg.sender}&background=6366f1&color=fff`;
 
         const div = document.createElement('div');
-        div.className = `fade-in flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} mb-2`;
+        div.className = `fade-in flex items-end gap-2 group ${isMine ? 'flex-row-reverse' : 'flex-row'} mb-2`;
+
+        let contentHtml = '';
+        if (msg.mediaUrl) {
+            if (msg.mediaType === 'video') {
+                contentHtml += `<video src="${msg.mediaUrl}" controls class="max-w-[180px] md:max-w-[220px] rounded-lg mt-1 mb-1 object-cover bg-black/10"></video>`;
+            } else {
+                contentHtml += `<a href="${msg.mediaUrl}" target="_blank"><img src="${msg.mediaUrl}" class="max-w-[180px] md:max-w-[220px] rounded-lg mt-1 mb-1 object-cover border border-black/5"></a>`;
+            }
+        }
+        
+        if (msg.text && msg.text !== '[Image]' && msg.text !== '[Video]') {
+            contentHtml += `<div class="${msg.mediaUrl ? 'mt-2' : ''} break-words whitespace-pre-wrap">${escapeHtml(msg.text)}</div>`;
+        }
+
+        // Reactions logic
+        let reactionsHtml = '';
+        if (msg.reactions && Object.keys(msg.reactions).length > 0) {
+            const rMap = {};
+            Object.values(msg.reactions).forEach(e => { rMap[e] = (rMap[e] || 0) + 1 });
+            let emojiList = Object.keys(rMap).join('');
+            const total = Object.values(rMap).reduce((a, b) => a + b, 0);
+            
+            reactionsHtml = `
+                <div class="absolute -bottom-2.5 ${isMine ? 'right-2' : 'left-8'} bg-slate-50 text-[12px] px-1.5 py-[2px] rounded-full shadow-[0_2px_8px_-2px_rgba(0,0,0,0.15)] border border-slate-200 flex items-center gap-0.5 z-10 cursor-pointer hover:bg-slate-100 transition-colors" onclick="openReactionPicker(event, '${msg.id}')">
+                    <span class="emoji-text leading-none">${emojiList}</span>
+                    ${total > 1 ? `<span class="text-slate-500 ml-0.5 text-[opacity-80] font-bold leading-none pr-0.5">${total}</span>` : ''}
+                </div>
+            `;
+        }
 
         if (isMine) {
+            const checkmarks = msg.read ? '✓✓' : '✓';
+            const checkColor = msg.read ? 'text-indigo-200' : 'text-indigo-200/60';
+            const editedTag = msg.edited ? `<span class="text-[9.5px] text-white/60 italic font-medium leading-none mr-1">edited</span>` : '';
+            
             div.innerHTML = `
-                <div class="flex flex-col items-end w-full">
-                    <div class="message-bubble mine px-4 py-2.5 shadow-sm text-sm">
-                        ${msg.text}
+                <div class="flex items-center gap-1.5 opacity-0 md:opacity-0 self-center transition-all group-hover:opacity-100 hidden md:flex">
+                    <button type="button" onclick="startEdit('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '')}'))" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Edit message">
+                        <i data-lucide="pencil" class="w-4 h-4"></i>
+                    </button>
+                    <button type="button" onclick="openReactionPicker(event, '${msg.id}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="React">
+                        <i data-lucide="smile-plus" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <div class="flex flex-col items-end w-full relative">
+                    <div class="message-bubble mine px-4 py-2 pt-2.5 shadow-sm text-sm relative" style="min-width: 65px;" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
+                        ${contentHtml}
+                        <div class="flex items-center justify-end mt-1.5 leading-none tracking-tighter" title="${msg.read ? 'Seen' : 'Delivered'}">
+                            ${editedTag}
+                            <div class="text-[11px] font-bold ${checkColor}">${checkmarks}</div>
+                        </div>
+                        ${reactionsHtml}
                     </div>
                 </div>
             `;
         } else {
+            const editedTag = msg.edited ? `<span class="text-[9.5px] text-slate-400 italic font-medium leading-none ml-1">edited</span>` : '';
             div.innerHTML = `
                 <img src="${avatar}" onclick="viewProfile('${msg.sender}')" class="w-7 h-7 rounded-full object-cover flex-shrink-0 self-end mb-1 border border-slate-200 cursor-pointer hover:opacity-80 transition-opacity">
-                <div class="flex flex-col items-start max-w-[75%]">
-                    <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm">
-                        ${msg.text}
+                <div class="flex flex-col items-start max-w-[75%] relative">
+                    <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm relative" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
+                        ${contentHtml}
+                        ${msg.edited ? `<div class="flex items-center justify-start mt-1.5">${editedTag}</div>` : ''}
+                        ${reactionsHtml}
                     </div>
+                </div>
+                <div class="opacity-0 md:opacity-0 self-center transition-all group-hover:opacity-100 hidden md:flex">
+                    <button type="button" onclick="openReactionPicker(event, '${msg.id}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="React">
+                        <i data-lucide="smile-plus" class="w-4 h-4"></i>
+                    </button>
                 </div>
             `;
         }
         container.appendChild(div);
     });
+    
     container.scrollTop = container.scrollHeight;
     lucide.createIcons();
+    
+    // Parse iOS theme Twemojis
+    if (window.twemoji) {
+        twemoji.parse(container, { folder: 'svg', ext: '.svg' });
+    }
+}
+
+// Helper to escape basic HTML symbols to prevent XSS
+function escapeHtml(unsafe) {
+    return (unsafe || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 window.viewProfile = (username) => {
@@ -493,6 +723,44 @@ window.viewProfile = (username) => {
     $('modal-profile-name').textContent = profile.displayName || username;
     $('modal-profile-username').textContent = '@' + username;
     $('profile-modal').classList.remove('hidden');
+};
+
+let currentReactingMsgId = null;
+
+window.openReactionPicker = (e, msgId) => {
+    currentReactingMsgId = msgId;
+    const picker = $('reaction-picker');
+    picker.classList.remove('hidden');
+    
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pickerWidth = 220; 
+    
+    let left = rect.left - (pickerWidth / 2) + 12;
+    if (left < 10) left = 10;
+    if (left + pickerWidth > window.innerWidth) left = window.innerWidth - pickerWidth - 10;
+    
+    let top = rect.top - 60;
+    if (top < 10) top = rect.bottom + 10;
+    
+    picker.style.top = top + 'px';
+    picker.style.left = left + 'px';
+    e.stopPropagation();
+};
+
+window.reactToMessageInline = async (msgId, emoji) => {
+    if (firebaseConfig.apiKey === "YOUR_API_KEY") return;
+    try {
+        await db.collection('messages').doc(msgId).set({ reactions: { [currentUser.username]: emoji } }, { merge: true });
+    } catch(e) {}
+};
+
+window.reactToMessage = async (emoji) => {
+    if (!currentReactingMsgId) return;
+    try {
+        await db.collection('messages').doc(currentReactingMsgId).set({ reactions: { [currentUser.username]: emoji } }, { merge: true });
+    } catch(e) {}
+    $('reaction-picker').classList.add('hidden');
+    currentReactingMsgId = null;
 };
 
 function renderMap() {
