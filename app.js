@@ -139,7 +139,7 @@ function showApp() {
     $('nav-username').textContent = currentUser.displayName || currentUser.username;
     $('user-avatar-initial').textContent = (currentUser.displayName || currentUser.username)[0].toUpperCase();
     
-    const partnerName = currentUser.partnerName || (currentUser.username === 'afra' ? 'Ramaaz' : 'Afra');
+    const partnerName = currentUser.partnerName || (currentUser.username === 'afra' ? 'hubby 🐣💗' : 'Afra');
     $('partner-name-display').textContent = partnerName;
     if ($('app-main-title')) $('app-main-title').textContent = `${partnerName}'s Routine`;
     
@@ -705,6 +705,26 @@ function setupEventListeners() {
     $('chat-back-btn')?.addEventListener('click', () => {
         switchTab('tab-schedule');
     });
+
+    // Reel Form
+    $('reel-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const url = $('reel-url').value.trim();
+        if(!url) return;
+
+        try {
+            await db.collection('reels').add({
+                url: url,
+                sharedBy: currentUser.username,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+            closeReelModal();
+            $('reel-url').value = '';
+        } catch(err) {
+            console.error(err);
+            alert("Failed to share reel.");
+        }
+    });
 }
 
 function startLocationSharing() {
@@ -771,6 +791,7 @@ function renderTab(tabId) {
             if ($('chat-badge')) $('chat-badge').classList.add('hidden');
             break;
         case 'tab-map': renderMap(); break;
+        case 'tab-reels': setupReelsListener(); break;
         case 'tab-settings': loadSettings(); break;
     }
     lucide.createIcons();
@@ -929,6 +950,9 @@ function renderChecklistUI(snapshot) {
             `;
         };
         
+        const fallbackRamaaz = (currentUser.username === 'afra' && currentUser.partnerName) ? currentUser.partnerName : 'hubby 🐣💗';
+        const fallbackAfra = (currentUser.username === 'ramaaz' && currentUser.partnerName) ? currentUser.partnerName : 'Afra';
+
         div.innerHTML = `
             <div class="flex-1 pr-4 max-w-[45%]">
                 <p class="font-bold text-slate-700 text-sm leading-tight break-words">${escapeHtml(item.text || item.item || '')}</p>
@@ -937,9 +961,9 @@ function renderChecklistUI(snapshot) {
                 </button>
             </div>
             <div class="flex gap-2 items-start opacity-90 border-l border-slate-100 pl-4 py-1 flex-1 justify-around bg-slate-50/50 rounded-r-xl -my-4 h-full">
-                ${renderUserCol('ramaaz', 'Ramaaz')}
+                ${renderUserCol('ramaaz', fallbackRamaaz)}
                 <div class="w-px h-12 bg-slate-200 self-center"></div>
-                ${renderUserCol('afra', 'Afra')}
+                ${renderUserCol('afra', fallbackAfra)}
             </div>
         `;
         container.appendChild(div);
@@ -1048,12 +1072,13 @@ function setupChatListener() {
         listeners.partnerStatus = db.collection('users').doc(partnerId).onSnapshot(doc => {
             if (doc.exists) {
                 const d = doc.data();
-                $('chat-partner-name').textContent = currentUser.partnerName || d.displayName || partnerId;
+                const fallbackName = currentUser.username === 'afra' ? 'hubby 🐣💗' : 'Afra';
+                $('chat-partner-name').textContent = currentUser.partnerName || d.displayName || fallbackName;
                 
                 // Typing detection
                 if (d.isTyping) {
                     $('typing-indicator').classList.remove('hidden');
-                    $('typing-text').textContent = (d.displayName || partnerId) + " is typing";
+                    $('typing-text').textContent = (currentUser.partnerName || d.displayName || fallbackName) + " is typing";
                 } else {
                     $('typing-indicator').classList.add('hidden');
                 }
@@ -1157,7 +1182,11 @@ function renderChatMessages(msgs) {
         }
         
         if (msg.replyTo) {
-            const replySender = msg.replyTo.sender === currentUser.username ? 'You' : msg.replyTo.sender;
+            let replySender = msg.replyTo.sender === currentUser.username ? 'You' : msg.replyTo.sender;
+            if (replySender !== 'You') {
+                const fallbackPartner = currentUser.username === 'afra' ? 'hubby 🐣💗' : 'Afra';
+                replySender = currentUser.partnerName || (replySender === 'ramaaz' ? 'hubby 🐣💗' : chatUserDataCache[replySender]?.displayName || replySender) || fallbackPartner;
+            }
             contentHtml = `
                 <div class="mb-1.5 px-3 py-1.5 bg-black/10 rounded-lg border-l-[3px] ${isMine ? 'border-emerald-300' : 'border-slate-400'} text-[11px] opacity-90 cursor-pointer overflow-hidden">
                     <strong class="${isMine ? 'text-emerald-100' : 'text-slate-600'} block mb-0.5 leading-none">${replySender}</strong>
@@ -1725,3 +1754,115 @@ window.removeWallpaper = async () => {
 };
 
 initApp();
+
+// 8. Reels Feature Implementation
+function setupReelsListener() {
+    if (listeners.reels) listeners.reels();
+    listeners.reels = db.collection('reels').orderBy('createdAt', 'desc').limit(20)
+        .onSnapshot(snapshot => {
+            const reels = [];
+            snapshot.forEach(doc => reels.push({ id: doc.id, ...doc.data() }));
+            renderReelsContent(reels);
+        });
+}
+
+function renderReelsContent(reels) {
+    const container = $('reels-container');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    if (reels.length === 0) {
+        container.innerHTML = `<div class="text-center py-20 text-slate-400">
+            <div class="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                <i data-lucide="video" class="w-10 h-10 opacity-20"></i>
+            </div>
+            <p class="font-bold text-slate-400">No reels shared yet. Share your first one!</p>
+        </div>`;
+        lucide.createIcons();
+        return;
+    }
+    
+    reels.forEach(reel => {
+        const div = document.createElement('div');
+        div.className = "bg-white rounded-[2.5rem] overflow-hidden shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-100 mb-8 group transition-all hover:shadow-xl";
+        
+        let embedHtml = '';
+        const url = reel.url.toLowerCase();
+        
+        try {
+            if (url.includes('tiktok.com')) {
+                // Handling both standard and shortened links
+                let videoId = '';
+                if(url.includes('/video/')) videoId = url.split('/video/')[1]?.split('?')[0];
+                else if (url.includes('vm.tiktok.com') || url.includes('vt.tiktok.com')) {
+                    // Shortened links usually require a redirect resolve, but we can try to show a link card if we can't embed directly without a backend
+                }
+                
+                if (videoId) {
+                    embedHtml = `<div class="relative w-full" style="height: 600px;">
+                        <iframe src="https://www.tiktok.com/embed/v2/${videoId}" class="absolute inset-0 w-full h-full border-0" allow="encrypted-media; autoplay"></iframe>
+                    </div>`;
+                }
+            } else if (url.includes('instagram.com')) {
+                let reelId = '';
+                if(url.includes('/reels/')) reelId = url.split('/reels/')[1]?.split('/')[0]?.split('?')[0];
+                else if(url.includes('/reel/')) reelId = url.split('/reel/')[1]?.split('/')[0]?.split('?')[0];
+                
+                if (reelId) {
+                    embedHtml = `<div class="relative w-full" style="height: 600px;">
+                        <iframe src="https://www.instagram.com/reels/${reelId}/embed" class="absolute inset-0 w-full h-full border-0" allow="encrypted-media"></iframe>
+                    </div>`;
+                }
+            }
+        } catch(e) {}
+
+        if (!embedHtml) {
+            embedHtml = `<div class="p-12 text-center bg-slate-50/50">
+                <i data-lucide="link-2" class="w-8 h-8 mx-auto mb-4 text-slate-300"></i>
+                <p class="text-slate-500 mb-4 text-sm font-medium">This link might not support direct preview.</p>
+                <a href="${reel.url}" target="_blank" class="inline-flex items-center gap-2 px-6 py-3 bg-white border border-slate-200 rounded-full text-emerald-600 font-bold text-sm hover:bg-emerald-50 transition-colors shadow-sm">
+                    Open in app <i data-lucide="external-link" class="w-4 h-4"></i>
+                </a>
+            </div>`;
+        }
+
+        const sharedByDisplay = reel.sharedBy === currentUser.username ? 'You' : (currentUser.partnerName && reel.sharedBy !== currentUser.username ? currentUser.partnerName : (reel.sharedBy.charAt(0).toUpperCase() + reel.sharedBy.slice(1)));
+
+        div.innerHTML = `
+            <div class="p-5 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <div class="w-9 h-9 rounded-full bg-gradient-to-tr from-emerald-400 to-teal-500 flex items-center justify-center text-xs font-bold text-white shadow-md">${reel.sharedBy[0].toUpperCase()}</div>
+                    <div>
+                        <span class="text-sm font-bold text-slate-800">${sharedByDisplay}</span>
+                        <p class="text-[10px] text-slate-400 font-medium">Shared recently</p>
+                    </div>
+                </div>
+                <button type="button" onclick="deleteReel('${reel.id}')" class="p-2.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-full transition-all opacity-0 group-hover:opacity-100">
+                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                </button>
+            </div>
+            ${embedHtml}
+        `;
+        container.appendChild(div);
+    });
+    lucide.createIcons();
+}
+
+window.openAddReel = () => {
+    $('reel-modal').classList.remove('hidden');
+    $('reel-url').focus();
+};
+
+window.closeReelModal = () => {
+    $('reel-modal').classList.add('hidden');
+};
+
+window.deleteReel = async (id) => {
+    if(confirm('Remove this reel from the feed?')) {
+        try {
+            await db.collection('reels').doc(id).delete();
+        } catch(e) {
+            alert("Failed to delete.");
+        }
+    }
+};
