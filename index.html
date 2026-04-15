@@ -209,7 +209,7 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-1.5">
-                                <button id="search-chat-btn" class="p-2.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors flex-shrink-0" title="Search Messages">
+                                <button type="button" id="search-chat-btn" class="p-2.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors flex-shrink-0" title="Search Messages">
                                     <i data-lucide="search" class="w-4 h-4"></i>
                                 </button>
                                 <button id="start-call-btn" class="p-2.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 rounded-full transition-colors flex-shrink-0" title="Voice Call">
@@ -367,6 +367,10 @@
                                     <label class="block text-sm font-medium text-slate-700 mb-1">Username (ID)</label>
                                     <input type="text" id="username-id-input" class="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none">
                                 </div>
+                                <div class="md:col-span-2 mt-4 border-t border-slate-100 pt-4">
+                                    <label class="block text-sm font-medium text-slate-700 mb-1">Partner's Display Name</label>
+                                    <input type="text" id="partner-name-input" placeholder="Custom name for your partner..." class="w-full px-4 py-2 rounded-xl border border-slate-200 focus:ring-2 focus:ring-emerald-500 outline-none placeholder:text-slate-300">
+                                </div>
                             </div>
 
                             <div>
@@ -452,7 +456,18 @@
                 <button id="delete-everyone-btn" class="w-full py-3.5 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all shadow-md shadow-red-200 active:scale-95">Delete for everyone</button>
                 <button id="delete-me-btn" class="w-full py-3.5 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition-colors active:scale-95">Delete for me</button>
                 <button onclick="closeDeleteModal()" class="w-full py-3 bg-transparent text-slate-500 font-bold rounded-xl hover:bg-slate-50 transition-colors mt-2 active:scale-95">Cancel</button>
+
             </div>
+        </div>
+    </div>
+
+    <!-- Mobile Message Options Sheet -->
+    <div id="message-options-sheet" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] hidden flex flex-col justify-end transition-all">
+        <div class="bg-white rounded-t-[2rem] w-full p-6 pb-12 shadow-2xl transform translate-y-full transition-transform duration-300" id="message-options-content">
+            <div class="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
+            <div class="flex flex-col gap-1.5" id="mobile-options-container">
+            </div>
+            <button onclick="closeMessageOptions()" class="w-full mt-4 py-3.5 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition-colors">Cancel</button>
         </div>
     </div>
 

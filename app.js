@@ -139,10 +139,11 @@ function showApp() {
     $('nav-username').textContent = currentUser.displayName || currentUser.username;
     $('user-avatar-initial').textContent = (currentUser.displayName || currentUser.username)[0].toUpperCase();
     
-    const partnerName = currentUser.username === 'afra' ? 'Ramaaz' : 'Afra';
+    const partnerName = currentUser.partnerName || (currentUser.username === 'afra' ? 'Ramaaz' : 'Afra');
     $('partner-name-display').textContent = partnerName;
     
     if ($('display-name-input')) $('display-name-input').value = currentUser.displayName || currentUser.username;
+    if ($('partner-name-input')) $('partner-name-input').value = currentUser.partnerName || '';
     if ($('username-id-input')) $('username-id-input').value = currentUser.username;
     if ($('custom-avatar-url')) $('custom-avatar-url').value = currentUser.avatarUrl || '';
     if ($('profile-preview')) $('profile-preview').src = currentUser.avatarUrl || `https://ui-avatars.com/api/?name=${currentUser.username}&background=6366f1&color=fff&size=128`;
@@ -312,14 +313,33 @@ function setupEventListeners() {
 
     let touchStartX = 0;
     let touchStartY = 0;
+    let longPressTimer = null;
+
     $('chat-messages').addEventListener('touchstart', e => {
-        if(e.target.closest('.message-bubble')) {
+        const bubble = e.target.closest('.message-bubble');
+        if(bubble) {
            touchStartX = e.changedTouches[0].clientX;
            touchStartY = e.changedTouches[0].clientY;
+           if (window.innerWidth < 768) {
+               longPressTimer = setTimeout(() => {
+                   window.showMobileMessageOptions(bubble);
+               }, 500); 
+           }
+        }
+    }, {passive:true});
+
+    $('chat-messages').addEventListener('touchmove', e => {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
         }
     }, {passive:true});
 
     $('chat-messages').addEventListener('touchend', e => {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
         const bubble = e.target.closest('.message-bubble');
         if(!bubble) return;
         const endX = e.changedTouches[0].clientX;
@@ -333,6 +353,35 @@ function setupEventListeners() {
             if(id && text && sender) window.startReply(id, decodeURIComponent(text), sender);
         }
     });
+
+    window.showMobileMessageOptions = (bubble) => {
+        const id = bubble.getAttribute('data-id');
+        const text = decodeURIComponent(bubble.getAttribute('data-text') || '');
+        const sender = bubble.getAttribute('data-sender');
+        const isMine = sender === currentUser.username;
+        const escapedText = text.replace(/'/g, "\\'").replace(/"/g, "&quot;");
+
+        const container = $('mobile-options-container');
+        container.innerHTML = `
+            <button onclick="reactToMessageInline('${id}', '❤️'); closeMessageOptions();" class="flex items-center justify-center gap-3 p-4 text-slate-700 hover:bg-slate-50 rounded-xl w-full font-bold text-lg border-b border-slate-100"><i data-lucide="heart" class="w-6 h-6 text-red-500"></i> React ❤️</button>
+            <button onclick="startReply('${id}', '${escapedText}', '${sender}'); closeMessageOptions();" class="flex items-center justify-center gap-3 p-4 text-slate-700 hover:bg-slate-50 rounded-xl w-full font-bold text-lg border-b border-slate-100"><i data-lucide="reply" class="w-6 h-6 text-slate-500"></i> Reply</button>
+            ${isMine ? `<button onclick="startEdit('${id}', '${escapedText}'); closeMessageOptions();" class="flex items-center justify-center gap-3 p-4 text-slate-700 hover:bg-slate-50 rounded-xl w-full font-bold text-lg border-b border-slate-100"><i data-lucide="pencil" class="w-6 h-6 text-slate-500"></i> Edit</button>` : ''}
+            <button onclick="promptDeleteMessage('${id}', ${isMine}); closeMessageOptions();" class="flex items-center justify-center gap-3 p-4 text-red-500 hover:bg-red-50 rounded-xl w-full font-bold text-lg border-b border-slate-100 border-0"><i data-lucide="trash-2" class="w-6 h-6"></i> Delete</button>
+        `;
+        lucide.createIcons();
+
+        $('message-options-sheet').classList.remove('hidden');
+        setTimeout(() => {
+            $('message-options-content').classList.remove('translate-y-full');
+        }, 10);
+    };
+
+    window.closeMessageOptions = () => {
+        $('message-options-content').classList.add('translate-y-full');
+        setTimeout(() => {
+            $('message-options-sheet').classList.add('hidden');
+        }, 300);
+    };
 
     // Quick Emoji Picker
     const quickEmojis = ['😂', '❤️', '😍', '🙏', '😭', '😊', '🥰', '👍', '🔥', '🤔', '👀', '🥺', '🎉', '✨', '💀', '💯', '😎', '😅'];
@@ -369,6 +418,29 @@ function setupEventListeners() {
             emojiMenu.classList.add('hidden');
             emojiMenu.classList.remove('grid');
         }
+    });
+
+    $('search-chat-btn')?.addEventListener('click', () => {
+        $('chat-search-bar').classList.toggle('hidden');
+        if (!$('chat-search-bar').classList.contains('hidden')) {
+            $('chat-search-input').focus();
+        } else {
+            $('chat-search-input').value = '';
+            if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
+        }
+    });
+    
+    $('close-search-btn')?.addEventListener('click', () => {
+        $('chat-search-bar').classList.add('hidden');
+        $('chat-search-input').value = '';
+        if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
+    });
+    
+    $('chat-search-input')?.addEventListener('input', (e) => {
+        const q = e.target.value.toLowerCase();
+        if(!q) return window.currentChatMessages ? renderChatMessages(window.currentChatMessages) : null;
+        const filtered = (window.currentChatMessages || []).filter(m => m.text && typeof m.text === 'string' && m.text.toLowerCase().includes(q));
+        renderChatMessages(filtered);
     });
 
     // Voice Record Listening
@@ -541,11 +613,13 @@ function setupEventListeners() {
     $('settings-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const displayName = $('display-name-input').value.trim();
+        const partnerName = $('partner-name-input') ? $('partner-name-input').value.trim() : '';
         const newPassword = $('new-password-input').value.trim();
         const avatarUrl = $('custom-avatar-url').value.trim();
         const newUsernameId = $('username-id-input').value.trim().toLowerCase();
 
         const updates = { displayName };
+        if (partnerName) updates.partnerName = partnerName;
         if (avatarUrl) updates.avatarUrl = avatarUrl;
         if (newPassword) updates.password = newPassword;
         if (newUsernameId && newUsernameId !== currentUser.username) updates.username = newUsernameId;
@@ -559,6 +633,7 @@ function setupEventListeners() {
         }
         
         currentUser.displayName = displayName;
+        if (partnerName) currentUser.partnerName = partnerName;
         if (avatarUrl) currentUser.avatarUrl = avatarUrl;
         if (newPassword) currentUser.password = newPassword;
         
@@ -670,11 +745,14 @@ function switchTab(tabId) {
     });
     
     const sidebar = $('sidebar-nav');
+    const header = document.querySelector('header');
     if (sidebar) {
         if (tabId === 'tab-chat') {
             sidebar.classList.add('max-md:hidden');
+            if (header) header.classList.add('max-md:hidden');
         } else {
             sidebar.classList.remove('max-md:hidden');
+            if (header) header.classList.remove('max-md:hidden');
         }
     }
 
@@ -961,31 +1039,7 @@ function setupChatListener() {
         }
     });
 
-    if (!listeners.searchAttached) {
-        listeners.searchAttached = true;
-        $('search-chat-btn')?.addEventListener('click', () => {
-            $('chat-search-bar').classList.toggle('hidden');
-            if (!$('chat-search-bar').classList.contains('hidden')) {
-                $('chat-search-input').focus();
-            } else {
-                $('chat-search-input').value = '';
-                if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
-            }
-        });
-        
-        $('close-search-btn')?.addEventListener('click', () => {
-            $('chat-search-bar').classList.add('hidden');
-            $('chat-search-input').value = '';
-            if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
-        });
-        
-        $('chat-search-input')?.addEventListener('input', (e) => {
-            const q = e.target.value.toLowerCase();
-            if(!q) return window.currentChatMessages ? renderChatMessages(window.currentChatMessages) : null;
-            const filtered = (window.currentChatMessages || []).filter(m => m.text && typeof m.text === 'string' && m.text.toLowerCase().includes(q));
-            renderChatMessages(filtered);
-        });
-    }
+    // Removed search listeners from here
     
     // Partner's Status listener (Last seen / Typing)
     if (!listeners.partnerStatus) {
@@ -993,7 +1047,7 @@ function setupChatListener() {
         listeners.partnerStatus = db.collection('users').doc(partnerId).onSnapshot(doc => {
             if (doc.exists) {
                 const d = doc.data();
-                $('chat-partner-name').textContent = d.displayName || partnerId;
+                $('chat-partner-name').textContent = currentUser.partnerName || d.displayName || partnerId;
                 
                 // Typing detection
                 if (d.isTyping) {
