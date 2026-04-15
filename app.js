@@ -447,63 +447,106 @@ function setupEventListeners() {
     // Voice Record Listening
     let mediaRecorder;
     let audioChunks = [];
+    let recordStartTime;
+    let recordTimerInterval;
+    let isRequesting = false;
 
-    $('voice-record-btn').addEventListener('click', async () => {
+    const toggleRecording = async () => {
+        if (isRequesting) return;
+        
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
-            $('voice-record-btn').classList.remove('bg-red-500', 'animate-pulse');
-            $('voice-record-btn').classList.add('bg-emerald-500');
-        } else {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                mediaRecorder = new MediaRecorder(stream);
-                mediaRecorder.start();
-                audioChunks = [];
+            return;
+        }
+
+        isRequesting = true;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            const options = { mimeType: 'audio/webm' };
+            if (!MediaRecorder.isTypeSupported('audio/webm')) options.mimeType = 'audio/mp4';
+            
+            mediaRecorder = new MediaRecorder(stream, options);
+            mediaRecorder.start();
+            audioChunks = [];
+            recordStartTime = Date.now();
+            
+            $('voice-record-btn').classList.remove('bg-emerald-500');
+            $('voice-record-btn').classList.add('bg-red-500', 'animate-pulse');
+            
+            $('chat-input').disabled = true;
+            $('chat-input').placeholder = "Recording... Tap mic to send";
+            
+            recordTimerInterval = setInterval(() => {
+                const sec = Math.floor((Date.now() - recordStartTime) / 1000);
+                $('chat-input').placeholder = `Recording... ${sec}s (Tap mic to send)`;
+            }, 1000);
+
+            mediaRecorder.addEventListener("dataavailable", event => {
+                audioChunks.push(event.data);
+            });
+
+            mediaRecorder.addEventListener("stop", async () => {
+                const audioBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+                stream.getTracks().forEach(t => t.stop());
+                clearInterval(recordTimerInterval);
                 
-                $('voice-record-btn').classList.remove('bg-emerald-500');
-                $('voice-record-btn').classList.add('bg-red-500', 'animate-pulse');
-                
-                mediaRecorder.addEventListener("dataavailable", event => {
-                    audioChunks.push(event.data);
-                });
-                mediaRecorder.addEventListener("stop", async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    stream.getTracks().forEach(t => t.stop());
-                    
-                    try {
-                        let url;
-                        if (storage) {
-                            try {
-                                const ref = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.webm`);
-                                await ref.put(audioBlob);
-                                url = await ref.getDownloadURL();
-                            } catch(err) {
-                                console.warn("Storage failed, using base64 fallback", err);
-                                url = await fileToBase64(audioBlob);
-                            }
-                        } else {
+                $('chat-input').disabled = false;
+                $('chat-input').placeholder = "Message";
+                $('voice-record-btn').classList.remove('bg-red-500', 'animate-pulse');
+                $('voice-record-btn').classList.add('bg-emerald-500');
+
+                // If recording was too short, ignore
+                if (Date.now() - recordStartTime < 800) return;
+
+                $('send-icon').classList.add('hidden');
+                $('upload-spinner').classList.remove('hidden');
+
+                try {
+                    let url;
+                    if (storage) {
+                        try {
+                            const ext = mediaRecorder.mimeType.includes('mp4') ? 'mp4' : 'webm';
+                            const ref = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.${ext}`);
+                            await ref.put(audioBlob);
+                            url = await ref.getDownloadURL();
+                        } catch(err) {
+                            console.warn("Storage failed, using base64 fallback", err);
                             url = await fileToBase64(audioBlob);
                         }
-                        
-                        await db.collection('messages').add({
-                            sender: currentUser.username,
-                            mediaUrl: url,
-                            mediaType: 'audio',
-                            read: false,
-                            timestamp: firebase.firestore.FieldValue.serverTimestamp()
-                        });
-                        updateMyStatus(false);
-                    } catch(err) {
-                        console.error("Audio upload error:", err);
-                        alert("Audio processing failed.");
+                    } else {
+                        url = await fileToBase64(audioBlob);
                     }
-                });
-            } catch(e) { 
-                console.error(e);
-                alert("Microphone access denied or unavailable."); 
-            }
+                    
+                    await db.collection('messages').add({
+                        sender: currentUser.username,
+                        text: '[Voice Note]',
+                        mediaUrl: url,
+                        mediaType: 'audio',
+                        read: false,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+                    });
+                    updateMyStatus(false);
+                } catch(err) {
+                    console.error("Audio upload error:", err);
+                }
+                
+                $('send-icon').classList.remove('hidden');
+                $('upload-spinner').classList.add('hidden');
+            });
+            isRequesting = false;
+        } catch(e) { 
+            isRequesting = false;
+            console.error(e);
+            alert("Microphone access denied. Please allow permissions in your browser."); 
         }
+    };
+
+    $('voice-record-btn').addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleRecording();
     });
+
 
     // Media Upload Listeners
     $('attach-media-btn').addEventListener('click', () => $('chat-media-input').click());
@@ -1120,7 +1163,7 @@ function renderChatMessages(msgs) {
     let lastDatePart = null;
 
     msgs.forEach(msg => {
-        if (!msg.text) return;
+        if (!msg.text && !msg.mediaUrl) return;
         if (msg.deletedFor && msg.deletedFor.includes(currentUser.username)) return;
 
         if (msg.isDeletedForAll) {
@@ -1177,7 +1220,7 @@ function renderChatMessages(msgs) {
             }
         }
         
-        if (msg.text && msg.text !== '[Image]' && msg.text !== '[Video]') {
+        if (msg.text && msg.text !== '[Image]' && msg.text !== '[Video]' && msg.text !== '[Voice Note]') {
             contentHtml += `<div class="${msg.mediaUrl ? 'mt-2' : ''} break-words whitespace-pre-wrap">${escapeHtml(msg.text)}</div>`;
         }
         
