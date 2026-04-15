@@ -50,8 +50,50 @@ const $ = (id) => document.getElementById(id);
 const q = (selector) => document.querySelector(selector);
 const qa = (selector) => document.querySelectorAll(selector);
 
+const fileToBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+});
+
 // 4. Initialization & Auth
+let currentTheme = 'emerald';
+function applyAppTheme(newTheme) {
+    if (newTheme === currentTheme) return;
+    const elements = document.querySelectorAll('*');
+    elements.forEach(el => {
+        if (el.className && typeof el.className === 'string') {
+            el.className = el.className.split(' ').map(c => {
+                if (c.includes(currentTheme)) return c.replace(currentTheme, newTheme);
+                if (newTheme !== 'emerald' && c.includes('teal')) {
+                    if (newTheme === 'pink') return c.replace('teal', 'rose');
+                    if (newTheme === 'blue') return c.replace('teal', 'cyan');
+                    if (newTheme === 'violet') return c.replace('teal', 'fuchsia');
+                    if (newTheme === 'orange') return c.replace('teal', 'amber');
+                    return c;
+                }
+                if (newTheme === 'emerald' && c.match(/rose|cyan|fuchsia|amber/)) {
+                    return c.replace(/rose|cyan|fuchsia|amber/, 'teal');
+                }
+                return c;
+            }).join(' ');
+        }
+    });
+    currentTheme = newTheme;
+    lucide.createIcons();
+}
+
 async function initApp() {
+    try {
+        if (db && typeof db.enablePersistence === 'function') {
+            // Enable offline background syncing
+            await db.enablePersistence({ synchronizeTabs: true });
+        }
+    } catch(err) {
+        console.warn("Persistence could not be enabled:", err);
+    }
+
     if (currentUser) {
         showApp();
     } else {
@@ -106,6 +148,9 @@ function showApp() {
     if ($('profile-preview')) $('profile-preview').src = currentUser.avatarUrl || `https://ui-avatars.com/api/?name=${currentUser.username}&background=6366f1&color=fff&size=128`;
     
     if(currentUser.wallpaperUrl) applyWallpaper(currentUser.wallpaperUrl);
+    if(currentUser.themeColor && currentUser.themeColor !== 'emerald') {
+        applyAppTheme(currentUser.themeColor);
+    }
     
     switchTab(activeTab);
     updateScheduleHeader();
@@ -331,12 +376,10 @@ function setupEventListeners() {
     let audioChunks = [];
 
     $('voice-record-btn').addEventListener('click', async () => {
-        if (!storage) return alert("Storage not configured.");
-        
         if (mediaRecorder && mediaRecorder.state === 'recording') {
             mediaRecorder.stop();
-            $('voice-record-btn').classList.remove('bg-red-500', 'text-white', 'animate-pulse');
-            $('voice-record-btn').classList.add('bg-slate-50', 'text-slate-400');
+            $('voice-record-btn').classList.remove('bg-red-500', 'animate-pulse');
+            $('voice-record-btn').classList.add('bg-emerald-500');
         } else {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -344,8 +387,8 @@ function setupEventListeners() {
                 mediaRecorder.start();
                 audioChunks = [];
                 
-                $('voice-record-btn').classList.remove('bg-slate-50', 'text-slate-400');
-                $('voice-record-btn').classList.add('bg-red-500', 'text-white', 'animate-pulse');
+                $('voice-record-btn').classList.remove('bg-emerald-500');
+                $('voice-record-btn').classList.add('bg-red-500', 'animate-pulse');
                 
                 mediaRecorder.addEventListener("dataavailable", event => {
                     audioChunks.push(event.data);
@@ -355,12 +398,19 @@ function setupEventListeners() {
                     stream.getTracks().forEach(t => t.stop());
                     
                     try {
-                        const url = await new Promise((resolve, reject) => {
-                            const ref = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.webm`);
-                            ref.put(audioBlob).then(() => {
-                                ref.getDownloadURL().then(resolve).catch(reject);
-                            }).catch(reject);
-                        });
+                        let url;
+                        if (storage) {
+                            try {
+                                const ref = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.webm`);
+                                await ref.put(audioBlob);
+                                url = await ref.getDownloadURL();
+                            } catch(err) {
+                                console.warn("Storage failed, using base64 fallback", err);
+                                url = await fileToBase64(audioBlob);
+                            }
+                        } else {
+                            url = await fileToBase64(audioBlob);
+                        }
                         
                         await db.collection('messages').add({
                             sender: currentUser.username,
@@ -372,7 +422,7 @@ function setupEventListeners() {
                         updateMyStatus(false);
                     } catch(err) {
                         console.error("Audio upload error:", err);
-                        alert("Audio upload failed.");
+                        alert("Audio processing failed.");
                     }
                 });
             } catch(e) { 
@@ -388,7 +438,6 @@ function setupEventListeners() {
     $('chat-media-input').addEventListener('change', async (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        if (!storage) { alert("Firebase Storage not configured."); return; }
         if (file.size > 20 * 1024 * 1024) { alert("File is too large! Maximum limit is 20MB."); return; }
         
         $('send-icon').classList.add('hidden');
@@ -396,10 +445,20 @@ function setupEventListeners() {
         $('attach-media-btn').disabled = true;
         
         try {
-            const ext = file.name.split('.').pop() || 'tmp';
-            const storageRef = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.${ext}`);
-            await storageRef.put(file);
-            const url = await storageRef.getDownloadURL();
+            let url;
+            if (storage) {
+                try {
+                    const ext = file.name.split('.').pop() || 'tmp';
+                    const storageRef = storage.ref(`chat_media/${Date.now()}_${currentUser.username}.${ext}`);
+                    await storageRef.put(file);
+                    url = await storageRef.getDownloadURL();
+                } catch(err) {
+                    console.warn("Storage upload failed, using base64 fallback", err);
+                    url = await fileToBase64(file);
+                }
+            } else {
+                url = await fileToBase64(file);
+            }
             
             const isVideo = file.type.startsWith('video/');
             const msg = {
@@ -415,7 +474,7 @@ function setupEventListeners() {
             updateMyStatus(false);
         } catch (err) {
             console.error("Upload Error:", err);
-            alert("Upload failed. Make sure your Firebase Storage rules allow test-mode uploads.");
+            alert("Failed to process file.");
         }
         
         $('send-icon').classList.remove('hidden');
@@ -484,18 +543,24 @@ function setupEventListeners() {
         const displayName = $('display-name-input').value.trim();
         const newPassword = $('new-password-input').value.trim();
         const avatarUrl = $('custom-avatar-url').value.trim();
+        const newUsernameId = $('username-id-input').value.trim().toLowerCase();
 
         const updates = { displayName };
         if (avatarUrl) updates.avatarUrl = avatarUrl;
-        
-        await db.collection('users').doc(currentUser.username).update(updates);
+        if (newPassword) updates.password = newPassword;
+        if (newUsernameId && newUsernameId !== currentUser.username) updates.username = newUsernameId;
+
+        if (newUsernameId && newUsernameId !== currentUser.username) {
+            await db.collection('users').doc(newUsernameId).set({ ...currentUser, ...updates });
+            try { await db.collection('users').doc(currentUser.username).delete(); } catch(e){}
+            currentUser.username = newUsernameId;
+        } else {
+            await db.collection('users').doc(currentUser.username).update(updates);
+        }
         
         currentUser.displayName = displayName;
         if (avatarUrl) currentUser.avatarUrl = avatarUrl;
-        if (newPassword) {
-            await db.collection('users').doc(currentUser.username).update({ password: newPassword });
-            currentUser.password = newPassword;
-        }
+        if (newPassword) currentUser.password = newPassword;
         
         if (sessionStorage.getItem('currentUser')) {
             sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
@@ -506,17 +571,50 @@ function setupEventListeners() {
         showApp();
     });
 
+    qa('#theme-color-picker button').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const newColor = btn.getAttribute('data-color');
+            applyAppTheme(newColor);
+            
+            qa('#theme-color-picker button').forEach(b => {
+                b.className = b.className.replace(/ring-2 ring-offset-2 ring-[a-z]+-500/g, '').replace('  ', ' ');
+            });
+            btn.className = btn.className + ` ring-2 ring-offset-2 ring-${newColor}-500`;
+            
+            try {
+                await db.collection('users').doc(currentUser.username).update({ themeColor: newColor });
+            } catch(e) {}
+            currentUser.themeColor = newColor;
+            
+            if (sessionStorage.getItem('currentUser')) {
+                sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+            } else {
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+        });
+    });
+
     $('avatar-file-input').addEventListener('change', async (e) => {
         const file = e.target.files[0];
-        if (!file || !storage) return;
+        if (!file) return;
         
         $('profile-preview').style.opacity = '0.4';
         
         try {
-            const ext = file.name.split('.').pop() || 'tmp';
-            const storageRef = storage.ref(`avatars/${currentUser.username}_${Date.now()}.${ext}`);
-            await storageRef.put(file);
-            const url = await storageRef.getDownloadURL();
+            let url;
+            if (storage) {
+                try {
+                    const ext = file.name.split('.').pop() || 'tmp';
+                    const storageRef = storage.ref(`avatars/${currentUser.username}_${Date.now()}.${ext}`);
+                    await storageRef.put(file);
+                    url = await storageRef.getDownloadURL();
+                } catch(err) {
+                    console.warn("Storage failed, using base64 fallback", err);
+                    url = await fileToBase64(file);
+                }
+            } else {
+                url = await fileToBase64(file);
+            }
             
             $('profile-preview').src = url;
             $('custom-avatar-url').value = url;
@@ -616,18 +714,18 @@ function renderTimetable(taskMap) {
             <div class="w-16 md:w-20 text-[10px] md:text-sm font-bold text-slate-400">${timeStr}</div>
             <div class="flex-1 flex items-center gap-4">
                 ${task ? `
-                    <div class="flex-1 p-3 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-between group/task transition-all hover:shadow-md">
+                    <div class="flex-1 p-3 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-between group/task transition-all hover:shadow-md">
                         <div class="flex items-center gap-3">
-                            <input type="checkbox" ${task.completed ? 'checked' : ''} onchange="toggleTask('${task.id}', this.checked)" class="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
+                            <input type="checkbox" ${task.completed ? 'checked' : ''} onchange="toggleTask('${task.id}', this.checked)" class="w-5 h-5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
                             <span class="text-sm font-medium ${task.completed ? 'line-through text-slate-400' : 'text-slate-700'}">${task.task}</span>
                         </div>
                         <div class="flex gap-1 opacity-0 md:group-hover/task:opacity-100 transition-opacity">
-                            <button onclick="editTask('${task.id}', '${task.task}', '${task.time}')" class="p-1.5 text-slate-400 hover:text-indigo-600 transition-colors"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
+                            <button onclick="editTask('${task.id}', '${task.task}', '${task.time}')" class="p-1.5 text-slate-400 hover:text-emerald-600 transition-colors"><i data-lucide="edit-3" class="w-4 h-4"></i></button>
                             <button onclick="deleteTask('${task.id}')" class="p-1.5 text-slate-400 hover:text-red-500 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                         </div>
                     </div>
                 ` : `
-                    <button onclick="openAddTask('${timeStr}')" class="add-task-btn flex items-center gap-2 text-slate-400 hover:text-indigo-600 px-3 py-2 rounded-lg hover:bg-white border border-dashed border-slate-200 hover:border-indigo-100 transition-all font-medium text-xs">
+                    <button onclick="openAddTask('${timeStr}')" class="add-task-btn flex items-center gap-2 text-slate-400 hover:text-emerald-600 px-3 py-2 rounded-lg hover:bg-white border border-dashed border-slate-200 hover:border-emerald-100 transition-all font-medium text-xs">
                         <i data-lucide="plus-circle" class="w-4 h-4"></i><span>Add Task</span>
                     </button>
                 `}
@@ -684,7 +782,7 @@ function renderChecklistUI(snapshot) {
     snapshot.forEach(doc => {
         const item = { id: doc.id, ...doc.data() };
         const div = document.createElement('div');
-        div.className = "flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl mb-3 shadow-sm transition-all hover:border-indigo-100";
+        div.className = "flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl mb-3 shadow-sm transition-all hover:border-emerald-100";
         
         const renderUserCol = (userKey, displayName) => {
             const state = item[userKey] || { status: 'none', lastUpdated: null };
@@ -838,8 +936,42 @@ function setupChatListener() {
             msgs.push({ id: doc.id, ...data });
         });
         
-        renderChatMessages(msgs);
+        window.currentChatMessages = msgs;
+        const searchInput = $('chat-search-input');
+        if (searchInput && searchInput.value) {
+            const q = searchInput.value.toLowerCase();
+            const filtered = msgs.filter(m => m.text && typeof m.text === 'string' && m.text.toLowerCase().includes(q));
+            renderChatMessages(filtered);
+        } else {
+            renderChatMessages(msgs);
+        }
     });
+
+    if (!listeners.searchAttached) {
+        listeners.searchAttached = true;
+        $('search-chat-btn')?.addEventListener('click', () => {
+            $('chat-search-bar').classList.toggle('hidden');
+            if (!$('chat-search-bar').classList.contains('hidden')) {
+                $('chat-search-input').focus();
+            } else {
+                $('chat-search-input').value = '';
+                if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
+            }
+        });
+        
+        $('close-search-btn')?.addEventListener('click', () => {
+            $('chat-search-bar').classList.add('hidden');
+            $('chat-search-input').value = '';
+            if (window.currentChatMessages) renderChatMessages(window.currentChatMessages);
+        });
+        
+        $('chat-search-input')?.addEventListener('input', (e) => {
+            const q = e.target.value.toLowerCase();
+            if(!q) return window.currentChatMessages ? renderChatMessages(window.currentChatMessages) : null;
+            const filtered = (window.currentChatMessages || []).filter(m => m.text && typeof m.text === 'string' && m.text.toLowerCase().includes(q));
+            renderChatMessages(filtered);
+        });
+    }
     
     // Partner's Status listener (Last seen / Typing)
     if (!listeners.partnerStatus) {
@@ -860,17 +992,28 @@ function setupChatListener() {
                 // Online/Last Seen computation
                 const now = new Date();
                 let isOnline = false;
+                let lastSeenStr = "Offline";
                 
                 if (d.lastSeen && typeof d.lastSeen.toDate === 'function') {
                     const lastSeenTime = d.lastSeen.toDate();
                     const secondsAgo = Math.floor((now - lastSeenTime) / 1000);
                     if (secondsAgo < 60) {
                         isOnline = true;
+                        lastSeenStr = "Online";
+                    } else {
+                        const isToday = lastSeenTime.getDate() === now.getDate() && lastSeenTime.getMonth() === now.getMonth() && lastSeenTime.getFullYear() === now.getFullYear();
+                        const tPart = lastSeenTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        if (isToday) {
+                             lastSeenStr = `Last seen today at ${tPart}`;
+                        } else {
+                             const dPart = lastSeenTime.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                             lastSeenStr = `Last seen ${dPart} at ${tPart}`;
+                        }
                     }
                 }
                 
-                $('online-status-text').textContent = isOnline ? "Online" : "Offline";
-                $('online-status-dot').className = `w-2 h-2 rounded-full transition-colors ${isOnline ? 'bg-green-500' : 'bg-red-500'}`;
+                $('online-status-text').textContent = isOnline ? "Online" : lastSeenStr;
+                $('online-status-dot').className = `w-2 h-2 rounded-full transition-colors ${isOnline ? 'bg-emerald-500' : 'bg-slate-400'}`;
             }
         });
     }
@@ -880,10 +1023,13 @@ function renderChatMessages(msgs) {
     const container = $('chat-messages');
     container.innerHTML = '';
 
+    let lastDatePart = null;
+
     msgs.forEach(msg => {
         if (!msg.text) return;
 
         let timeString = '';
+        let datePartToCompare = null;
         if (msg.timestamp) {
             try {
                 const date = typeof msg.timestamp.toDate === 'function' ? msg.timestamp.toDate() : new Date(msg.timestamp);
@@ -891,15 +1037,25 @@ function renderChatMessages(msgs) {
                 const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
                 
                 const timePart = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const datePart = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                datePartToCompare = datePart;
+
                 if (isToday) {
                     timeString = timePart;
                 } else {
-                    const datePart = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
                     timeString = `${datePart}, ${timePart}`;
                 }
             } catch(e) {
                 timeString = '';
             }
+        }
+
+        if (datePartToCompare && datePartToCompare !== lastDatePart) {
+            const sepDiv = document.createElement('div');
+            sepDiv.className = 'w-full flex justify-center my-2';
+            sepDiv.innerHTML = `<span class="chat-date-separator bg-white/80 backdrop-blur-sm text-slate-500 text-xs px-3 py-1 font-semibold rounded-full shadow-sm">${datePartToCompare.toUpperCase()}</span>`;
+            container.appendChild(sepDiv);
+            lastDatePart = datePartToCompare;
         }
 
         const isMine = msg.sender === currentUser.username;
@@ -927,8 +1083,8 @@ function renderChatMessages(msgs) {
         if (msg.replyTo) {
             const replySender = msg.replyTo.sender === currentUser.username ? 'You' : msg.replyTo.sender;
             contentHtml = `
-                <div class="mb-1.5 px-3 py-1.5 bg-black/10 rounded-lg border-l-[3px] ${isMine ? 'border-indigo-300' : 'border-slate-400'} text-[11px] opacity-90 cursor-pointer overflow-hidden">
-                    <strong class="${isMine ? 'text-indigo-100' : 'text-slate-600'} block mb-0.5 leading-none">${replySender}</strong>
+                <div class="mb-1.5 px-3 py-1.5 bg-black/10 rounded-lg border-l-[3px] ${isMine ? 'border-emerald-300' : 'border-slate-400'} text-[11px] opacity-90 cursor-pointer overflow-hidden">
+                    <strong class="${isMine ? 'text-emerald-100' : 'text-slate-600'} block mb-0.5 leading-none">${replySender}</strong>
                     <div class="truncate max-w-[150px] md:max-w-[200px] text-ellipsis whitespace-nowrap overflow-hidden">${escapeHtml(msg.replyTo.text)}</div>
                 </div>
             ` + contentHtml;
@@ -952,7 +1108,7 @@ function renderChatMessages(msgs) {
 
         if (isMine) {
             const checkmarks = msg.read ? '✓✓' : '✓';
-            const checkColor = msg.read ? 'text-indigo-200' : 'text-indigo-200/60';
+            const checkColor = msg.read ? 'text-emerald-200' : 'text-emerald-200/60';
             const editedTag = msg.edited ? `<span class="text-[9.5px] text-white/60 italic font-medium leading-none mr-1">edited</span>` : '';
             
             div.innerHTML = `
@@ -972,7 +1128,7 @@ function renderChatMessages(msgs) {
                         ${contentHtml}
                         <div class="flex items-center justify-end mt-1.5 gap-1.5 leading-none tracking-tighter" title="${msg.read ? 'Seen' : 'Delivered'}">
                             ${editedTag}
-                            <span class="text-[9px] text-indigo-200/80 font-medium">${timeString}</span>
+                            <span class="text-[9px] text-emerald-200/80 font-medium">${timeString}</span>
                             <div class="text-[11px] font-bold ${checkColor}">${checkmarks}</div>
                         </div>
                         ${reactionsHtml}
@@ -1161,7 +1317,7 @@ window.requestMapPermission = () => {
                 const { latitude, longitude } = position.coords;
                 if ($('enable-location-btn')) {
                     const btn = $('enable-location-btn');
-                    btn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
+                    btn.classList.remove('bg-emerald-600', 'hover:bg-emerald-700');
                     btn.classList.add('bg-green-500', 'hover:bg-green-600');
                     btn.innerHTML = `<i data-lucide="check-circle-2" class="w-4 h-4"></i><span>Sharing</span>`;
                     lucide.createIcons();
