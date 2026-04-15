@@ -141,6 +141,7 @@ function showApp() {
     
     const partnerName = currentUser.partnerName || (currentUser.username === 'afra' ? 'Ramaaz' : 'Afra');
     $('partner-name-display').textContent = partnerName;
+    if ($('app-main-title')) $('app-main-title').textContent = `${partnerName}'s Routine`;
     
     if ($('display-name-input')) $('display-name-input').value = currentUser.displayName || currentUser.username;
     if ($('partner-name-input')) $('partner-name-input').value = currentUser.partnerName || '';

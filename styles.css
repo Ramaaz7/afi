@@ -223,3 +223,63 @@ body {
 }
 
 .leaflet-container { font-family: inherit; }
+
+/* System Dark Mode Auto-Adaptation */
+@media (prefers-color-scheme: dark) {
+    body { background-color: #0f172a !important; color: #f8fafc !important; }
+    
+    .bg-white { background-color: #1e293b !important; color: #f8fafc !important; border-color: #334155 !important; }
+    .bg-slate-50 { background-color: #0f172a !important; color: #f8fafc !important; }
+    
+    .text-slate-900, .text-slate-800 { color: #f8fafc !important; }
+    .text-slate-700 { color: #e2e8f0 !important; }
+    .text-slate-600 { color: #cbd5e1 !important; }
+    .text-slate-500 { color: #94a3b8 !important; }
+    .text-slate-400 { color: #64748b !important; }
+    
+    .border-slate-100 { border-color: #1e293b !important; }
+    .border-slate-200 { border-color: #334155 !important; }
+    
+    .bg-slate-100 { background-color: #334155 !important; }
+    .hover\:bg-slate-50:hover { background-color: #334155 !important; }
+    .hover\:bg-slate-100:hover { background-color: #475569 !important; }
+
+    /* Forms and Inputs */
+    input, select, textarea { 
+        background-color: #0f172a !important; 
+        color: white !important; 
+        border-color: #334155 !important; 
+    }
+    input::placeholder { color: #64748b !important; }
+
+    /* Modals & Components */
+    #login-overlay .bg-white { background-color: #1e293b !important; }
+    #task-modal .bg-white, #profile-modal .bg-white { background-color: #1e293b !important; }
+    #message-options-content, #delete-message-content { background-color: #1e293b !important; }
+
+    /* Sidebar / Bottom Nav */
+    #sidebar-nav { background-color: #1e293b !important; border-top-color: #334155 !important; border-right-color: #334155 !important; }
+    .nav-item:hover { background-color: #334155 !important; }
+    .nav-item.active { background-color: #064e3b !important; color: #34d399 !important; }
+
+    /* App Headers */
+    #app-content header { background-color: #1e293b !important; border-bottom-color: #334155 !important; }
+    
+    /* Timetable / Cards */
+    .timetable-row:hover { background-color: #1e293b !important; }
+    .bg-emerald-50 { background-color: #064e3b !important; border-color: #065f46 !important; }
+    .text-emerald-700 { color: #a7f3d0 !important; }
+
+    /* Chat Interface */
+    .chat-bg-pattern { 
+        background-color: #0b141a !important; 
+        background-image: radial-gradient(#1e293b 1px, transparent 1px); 
+    }
+    .message-bubble.mine { background-color: #005c4b !important; color: #e9edef !important; }
+    .message-bubble.mine::before { border-color: transparent #005c4b transparent transparent !important; }
+    
+    .message-bubble.theirs { background-color: #202c33 !important; color: #e9edef !important; border: 1px solid #2a3942 !important; }
+    .message-bubble.theirs::before { border-color: transparent transparent transparent #202c33 !important; }
+    
+    .chat-date-separator { background-color: #182229 !important; color: #8696a0 !important; box-shadow: none !important; }
+}
