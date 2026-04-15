@@ -1041,6 +1041,13 @@ function renderChatMessages(msgs) {
 
     msgs.forEach(msg => {
         if (!msg.text) return;
+        if (msg.deletedFor && msg.deletedFor.includes(currentUser.username)) return;
+
+        if (msg.isDeletedForAll) {
+            msg.text = "🚫 This message was deleted";
+            msg.mediaUrl = null;
+            msg.mediaType = null;
+        }
 
         let timeString = '';
         let datePartToCompare = null;
@@ -1130,8 +1137,11 @@ function renderChatMessages(msgs) {
                     <button type="button" onclick="startReply('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '[Media]')}'), '${msg.sender}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Reply">
                         <i data-lucide="reply" class="w-4 h-4"></i>
                     </button>
-                    <button type="button" onclick="startEdit('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '')}'))" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Edit message">
+                    ${!msg.isDeletedForAll ? `<button type="button" onclick="startEdit('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '')}'))" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Edit message">
                         <i data-lucide="pencil" class="w-4 h-4"></i>
+                    </button>` : ''}
+                    <button type="button" onclick="promptDeleteMessage('${msg.id}', true)" class="p-1.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-100" title="Delete">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
                     </button>
                     <button type="button" onclick="openReactionPicker(event, '${msg.id}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="React">
                         <i data-lucide="smile-plus" class="w-4 h-4"></i>
@@ -1170,6 +1180,9 @@ function renderChatMessages(msgs) {
                     <button type="button" onclick="startReply('${msg.id}', decodeURIComponent('${encodeURIComponent(msg.text || '[Media]')}'), '${msg.sender}')" class="p-1.5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-100" title="Reply">
                         <i data-lucide="reply" class="w-4 h-4"></i>
                     </button>
+                    <button type="button" onclick="promptDeleteMessage('${msg.id}', false)" class="p-1.5 text-slate-400 hover:text-red-500 rounded-full hover:bg-slate-100" title="Delete for me">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
                 </div>
             `;
         }
@@ -1179,6 +1192,53 @@ function renderChatMessages(msgs) {
     container.scrollTop = container.scrollHeight;
     lucide.createIcons();
 }
+
+window.messageToDelete = null;
+
+window.promptDeleteMessage = (id, isMine) => {
+    window.messageToDelete = { id, isMine };
+    const modal = $('delete-message-modal');
+    const everyoneBtn = $('delete-everyone-btn');
+    if (everyoneBtn) everyoneBtn.style.display = isMine ? 'block' : 'none';
+    
+    modal.classList.remove('hidden');
+    setTimeout(() => {
+        $('delete-message-content').classList.remove('scale-95', 'opacity-0');
+        $('delete-message-content').classList.add('scale-100', 'opacity-100');
+    }, 10);
+};
+
+window.closeDeleteModal = () => {
+    $('delete-message-content').classList.remove('scale-100', 'opacity-100');
+    $('delete-message-content').classList.add('scale-95', 'opacity-0');
+    setTimeout(() => {
+        $('delete-message-modal').classList.add('hidden');
+        window.messageToDelete = null;
+    }, 200);
+};
+
+$('delete-everyone-btn')?.addEventListener('click', async () => {
+    if (!window.messageToDelete || !window.messageToDelete.isMine) return;
+    try {
+        await db.collection('messages').doc(window.messageToDelete.id).update({ 
+            isDeletedForAll: true, 
+            text: '🚫 This message was deleted', 
+            mediaUrl: null, 
+            mediaType: null 
+        });
+    } catch(err) { console.error(err); }
+    closeDeleteModal();
+});
+
+$('delete-me-btn')?.addEventListener('click', async () => {
+    if (!window.messageToDelete) return;
+    try {
+        await db.collection('messages').doc(window.messageToDelete.id).update({
+            deletedFor: firebase.firestore.FieldValue.arrayUnion(currentUser.username)
+        });
+    } catch(err) { console.error(err); }
+    closeDeleteModal();
+});
 
 // Helper to escape basic HTML symbols to prevent XSS
 function escapeHtml(unsafe) {

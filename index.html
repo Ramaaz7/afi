@@ -439,6 +439,23 @@
         </div>
     </div>
 
+    <!-- Delete Message Modal -->
+    <div id="delete-message-modal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[70] flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-[2rem] w-full max-w-[320px] p-8 shadow-xl text-center transform scale-95 opacity-0 transition-all duration-200" id="delete-message-content">
+            <div class="w-14 h-14 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-5 shadow-inner">
+                <i data-lucide="trash-2" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-xl font-bold text-slate-800 mb-2">Delete message?</h3>
+            <p class="text-sm text-slate-500 mb-8 font-medium">This action cannot be undone.</p>
+            
+            <div class="flex flex-col gap-3">
+                <button id="delete-everyone-btn" class="w-full py-3.5 bg-red-500 text-white font-bold rounded-xl hover:bg-red-600 transition-all shadow-md shadow-red-200 active:scale-95">Delete for everyone</button>
+                <button id="delete-me-btn" class="w-full py-3.5 bg-slate-100 text-slate-700 font-bold rounded-xl hover:bg-slate-200 transition-colors active:scale-95">Delete for me</button>
+                <button onclick="closeDeleteModal()" class="w-full py-3 bg-transparent text-slate-500 font-bold rounded-xl hover:bg-slate-50 transition-colors mt-2 active:scale-95">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- User Profile Modal -->
     <div id="profile-modal" class="fixed inset-0 z-[60] hidden flex flex-col items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 transition-all">
         <div class="bg-white rounded-[2rem] p-8 w-full max-w-[320px] shadow-2xl relative text-center transform transition-transform scale-100">
