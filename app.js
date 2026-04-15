@@ -39,7 +39,7 @@ try {
 }
 
 // State & State Management
-let currentUser = JSON.parse(localStorage.getItem('currentUser')) || null;
+let currentUser = JSON.parse(localStorage.getItem('currentUser')) || JSON.parse(sessionStorage.getItem('currentUser')) || null;
 let activeTab = 'tab-schedule';
 let map = null;
 let markers = {};
@@ -146,7 +146,13 @@ function setupEventListeners() {
             }
 
             currentUser = { ...user, ...profile };
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            if ($('remember-me') && $('remember-me').checked) {
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                sessionStorage.removeItem('currentUser');
+            } else {
+                sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+                localStorage.removeItem('currentUser');
+            }
             showApp();
         } else {
             $('login-error').classList.remove('hidden');
@@ -175,6 +181,7 @@ function setupEventListeners() {
     // Logout
     $('logout-btn').addEventListener('click', () => {
         localStorage.removeItem('currentUser');
+        sessionStorage.removeItem('currentUser');
         currentUser = null;
         showLogin();
     });
@@ -188,13 +195,13 @@ function setupEventListeners() {
 
     $('checklist-form').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const item = $('checklist-input').value.trim();
-        if (item) {
+        const text = $('checklist-input').value.trim();
+        if (text) {
             await db.collection('checklist').add({
-                item,
-                status: 'pending',
-                assignedTo: 'both',
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
+                text: text,
+                createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                ramaaz: { status: 'none', lastUpdated: null },
+                afra: { status: 'none', lastUpdated: null }
             });
             $('checklist-input').value = '';
         }
@@ -490,7 +497,11 @@ function setupEventListeners() {
             currentUser.password = newPassword;
         }
         
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        if (sessionStorage.getItem('currentUser')) {
+            sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+        } else {
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        }
         alert('Profile updated successfully!');
         showApp();
     });
@@ -642,30 +653,130 @@ window.toggleTask = (id, status) => db.collection('timetable').doc(id).update({ 
 
 function setupChecklistListener() {
     if (listeners.checklist) listeners.checklist();
-    listeners.checklist = db.collection('checklist').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
-        const container = $('checklist-items'); container.innerHTML = '';
-        if (snapshot.empty) {
-            container.innerHTML = `<div class="text-center py-8 text-slate-400"><i data-lucide="clipboard-list" class="w-12 h-12 mx-auto mb-2 opacity-50"></i><p>No items yet.</p></div>`;
-        } else {
-            snapshot.forEach(doc => {
-                const item = { id: doc.id, ...doc.data() };
-                const div = document.createElement('div');
-                div.className = `flex items-center justify-between p-3 rounded-xl border border-slate-100 transition-all ${item.status === 'done' ? 'bg-slate-50' : 'bg-white'}`;
-                div.innerHTML = `
-                    <div class="flex items-center gap-3">
-                        <input type="checkbox" ${item.status === 'done' ? 'checked' : ''} onchange="toggleChecklistItem('${item.id}', this.checked)" class="w-5 h-5 rounded-full border-slate-300 text-indigo-600 focus:ring-indigo-500">
-                        <span class="text-sm font-medium ${item.status === 'done' ? 'line-through text-slate-400' : 'text-slate-700'}">${item.item}</span>
-                    </div>
-                    <button onclick="deleteChecklistItem('${item.id}')" class="text-slate-300 hover:text-red-500"><i data-lucide="x" class="w-4 h-4"></i></button>
-                `;
-                container.appendChild(div);
-            });
+    
+    // Auto refresh timer to update lock UI countdowns
+    if (listeners.checklistTimer) clearInterval(listeners.checklistTimer);
+    listeners.checklistTimer = setInterval(() => {
+        if (activeTab === 'tab-checklist' && document.getElementById('checklist-items')) {
+            lucide.createIcons(); // Simply running a UI pass, though proper react-like state would re-render.
+            // Let's force a re-render of the list if needed by storing the data:
+            if(window.lastChecklistSnapshot) renderChecklistUI(window.lastChecklistSnapshot);
         }
-        lucide.createIcons();
+    }, 60000);
+
+    listeners.checklist = db.collection('checklist').orderBy('createdAt', 'desc').onSnapshot(snapshot => {
+        window.lastChecklistSnapshot = snapshot;
+        renderChecklistUI(snapshot);
     });
 }
-window.toggleChecklistItem = (id, checked) => db.collection('checklist').doc(id).update({ status: checked ? 'done' : 'pending' });
-window.deleteChecklistItem = id => db.collection('checklist').doc(id).delete();
+
+function renderChecklistUI(snapshot) {
+    const container = $('checklist-items');
+    if (!container) return;
+    container.innerHTML = '';
+    
+    if (snapshot.empty) {
+        container.innerHTML = `<div class="text-center py-8 text-slate-400"><i data-lucide="clipboard-list" class="w-12 h-12 mx-auto mb-2 opacity-50"></i><p>No items yet. Add a new goal!</p></div>`;
+        lucide.createIcons();
+        return;
+    }
+    
+    snapshot.forEach(doc => {
+        const item = { id: doc.id, ...doc.data() };
+        const div = document.createElement('div');
+        div.className = "flex items-center justify-between p-4 bg-white border border-slate-100 rounded-2xl mb-3 shadow-sm transition-all hover:border-indigo-100";
+        
+        const renderUserCol = (userKey, displayName) => {
+            const state = item[userKey] || { status: 'none', lastUpdated: null };
+            let isLocked = false;
+            let timeStr = '';
+            
+            if (state.lastUpdated) {
+                const elapsedMs = Date.now() - state.lastUpdated;
+                if (elapsedMs < 12 * 60 * 60 * 1000) {
+                    isLocked = true;
+                    const timeLeft = Math.ceil((12 * 60 * 60 * 1000 - elapsedMs) / (60 * 1000));
+                    const hours = Math.floor(timeLeft / 60);
+                    const mins = timeLeft % 60;
+                    timeStr = `${hours}h ${mins}m`;
+                }
+            }
+            
+            let buttonsHtml = '';
+            if (isLocked) {
+                if (state.status === 'right') {
+                    buttonsHtml = `
+                        <div class="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center shadow-md"><i data-lucide="check" class="w-5 h-5"></i></div>
+                        <div class="text-[9px] text-slate-400 mt-1.5 font-bold whitespace-nowrap flex items-center justify-center gap-0.5"><i data-lucide="lock" class="w-2.5 h-2.5"></i> ${timeStr}</div>`;
+                } else if (state.status === 'wrong') {
+                    buttonsHtml = `
+                        <div class="w-8 h-8 rounded-full bg-red-500 text-white flex items-center justify-center shadow-md"><i data-lucide="x" class="w-5 h-5"></i></div>
+                        <div class="text-[9px] text-slate-400 mt-1.5 font-bold whitespace-nowrap flex items-center justify-center gap-0.5"><i data-lucide="lock" class="w-2.5 h-2.5"></i> ${timeStr}</div>`;
+                }
+            } else {
+                const disabledStr = (currentUser.username === userKey) ? '' : 'disabled class="opacity-30 cursor-not-allowed"';
+                const activeClass = (currentUser.username === userKey) ? 'hover:scale-110 active:scale-95' : '';
+                buttonsHtml = `
+                    <div class="flex gap-1.5">
+                        <button class="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 hover:bg-green-500 hover:border-green-500 hover:text-white transition-all text-slate-400 flex items-center justify-center shadow-sm ${activeClass}" onclick="updateChecklist('${item.id}', '${userKey}', 'right')" ${disabledStr}>
+                            <i data-lucide="check" class="w-5 h-5"></i>
+                        </button>
+                        <button class="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 hover:bg-red-500 hover:border-red-500 hover:text-white transition-all text-slate-400 flex items-center justify-center shadow-sm ${activeClass}" onclick="updateChecklist('${item.id}', '${userKey}', 'wrong')" ${disabledStr}>
+                            <i data-lucide="x" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                `;
+            }
+            
+            return `
+                <div class="flex flex-col items-center flex-1">
+                    <span class="text-[10px] uppercase font-bold text-slate-400 block mb-2 tracking-wider">${displayName}</span>
+                    <div class="flex flex-col justify-center items-center h-10 w-full">
+                        ${buttonsHtml}
+                    </div>
+                </div>
+            `;
+        };
+        
+        div.innerHTML = `
+            <div class="flex-1 pr-4 max-w-[45%]">
+                <p class="font-bold text-slate-700 text-sm leading-tight break-words">${escapeHtml(item.text || item.item || '')}</p>
+                <button class="text-[10px] text-slate-400 hover:text-red-500 mt-2.5 flex items-center gap-1 font-bold uppercase transition-colors group" onclick="deleteChecklistItem('${item.id}')">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5 group-hover:scale-110 transition-transform"></i> Delete
+                </button>
+            </div>
+            <div class="flex gap-2 items-start opacity-90 border-l border-slate-100 pl-4 py-1 flex-1 justify-around bg-slate-50/50 rounded-r-xl -my-4 h-full">
+                ${renderUserCol('ramaaz', 'Ramaaz')}
+                <div class="w-px h-12 bg-slate-200 self-center"></div>
+                ${renderUserCol('afra', 'Afra')}
+            </div>
+        `;
+        container.appendChild(div);
+    });
+    
+    lucide.createIcons();
+}
+
+window.updateChecklist = async (id, userKey, status) => {
+    if (currentUser.username !== userKey) {
+        alert("You can only check off your own column!");
+        return;
+    }
+    try {
+        await db.collection('checklist').doc(id).update({
+            [userKey]: {
+                status: status,
+                lastUpdated: Date.now()
+            }
+        });
+    } catch(err) { console.error(err); }
+};
+
+window.deleteChecklistItem = async id => {
+    if (confirm("Delete this mutual goal permanently?")) {
+        await db.collection('checklist').doc(id).delete();
+    }
+};
 
 let chatUserDataCache = {};
 let unreadChatCount = 0;
@@ -772,6 +883,25 @@ function renderChatMessages(msgs) {
     msgs.forEach(msg => {
         if (!msg.text) return;
 
+        let timeString = '';
+        if (msg.timestamp) {
+            try {
+                const date = typeof msg.timestamp.toDate === 'function' ? msg.timestamp.toDate() : new Date(msg.timestamp);
+                const now = new Date();
+                const isToday = date.getDate() === now.getDate() && date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
+                
+                const timePart = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                if (isToday) {
+                    timeString = timePart;
+                } else {
+                    const datePart = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                    timeString = `${datePart}, ${timePart}`;
+                }
+            } catch(e) {
+                timeString = '';
+            }
+        }
+
         const isMine = msg.sender === currentUser.username;
         const senderProfile = chatUserDataCache[msg.sender] || { displayName: msg.sender };
         const avatar = senderProfile.avatarUrl || `https://ui-avatars.com/api/?name=${msg.sender}&background=6366f1&color=fff`;
@@ -840,8 +970,9 @@ function renderChatMessages(msgs) {
                 <div class="flex flex-col items-end w-full relative">
                     <div class="message-bubble mine px-4 py-2 pt-2.5 shadow-sm text-sm relative" style="min-width: 65px;" data-id="${msg.id}" data-text="${encodeURIComponent(msg.text || '[Media]')}" data-sender="${msg.sender}" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
                         ${contentHtml}
-                        <div class="flex items-center justify-end mt-1.5 leading-none tracking-tighter" title="${msg.read ? 'Seen' : 'Delivered'}">
+                        <div class="flex items-center justify-end mt-1.5 gap-1.5 leading-none tracking-tighter" title="${msg.read ? 'Seen' : 'Delivered'}">
                             ${editedTag}
+                            <span class="text-[9px] text-indigo-200/80 font-medium">${timeString}</span>
                             <div class="text-[11px] font-bold ${checkColor}">${checkmarks}</div>
                         </div>
                         ${reactionsHtml}
@@ -855,7 +986,10 @@ function renderChatMessages(msgs) {
                 <div class="flex flex-col items-start max-w-[75%] relative">
                     <div class="message-bubble theirs px-4 py-2.5 shadow-sm text-sm relative" data-id="${msg.id}" data-text="${encodeURIComponent(msg.text || '[Media]')}" data-sender="${msg.sender}" ondblclick="reactToMessageInline('${msg.id}', '❤️')">
                         ${contentHtml}
-                        ${msg.edited ? `<div class="flex items-center justify-start mt-1.5">${editedTag}</div>` : ''}
+                        <div class="flex items-center justify-end mt-1.5 gap-1.5 leading-none tracking-tighter">
+                            ${msg.edited ? editedTag : ''}
+                            <span class="text-[9px] text-slate-400 font-medium">${timeString}</span>
+                        </div>
                         ${reactionsHtml}
                     </div>
                 </div>
@@ -1269,7 +1403,11 @@ if ($('wallpaper-upload')) {
             });
             
             currentUser.wallpaperUrl = url;
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            if (sessionStorage.getItem('currentUser')) {
+                sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+            } else {
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
             applyWallpaper(url);
             
             btn.innerHTML = originalHtml;
@@ -1290,7 +1428,11 @@ window.removeWallpaper = async () => {
             wallpaperUrl: firebase.firestore.FieldValue.delete()
         });
         delete currentUser.wallpaperUrl;
-        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        if (sessionStorage.getItem('currentUser')) {
+            sessionStorage.setItem('currentUser', JSON.stringify(currentUser));
+        } else {
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        }
         applyWallpaper(null);
     } catch(err) {
         console.error(err);
