@@ -625,6 +625,10 @@ function setupEventListeners() {
             $('profile-preview').style.opacity = '1';
         }
     });
+
+    $('chat-back-btn')?.addEventListener('click', () => {
+        switchTab('tab-schedule');
+    });
 }
 
 function startLocationSharing() {
@@ -664,6 +668,16 @@ function switchTab(tabId) {
         pane.classList.toggle('hidden', pane.id !== tabId);
         pane.classList.toggle('active', pane.id === tabId);
     });
+    
+    const sidebar = $('sidebar-nav');
+    if (sidebar) {
+        if (tabId === 'tab-chat') {
+            sidebar.classList.add('max-md:hidden');
+        } else {
+            sidebar.classList.remove('max-md:hidden');
+        }
+    }
+
     if (tabId === 'tab-map' && map) setTimeout(() => map.invalidateSize(), 300);
     renderTab(tabId);
 }
